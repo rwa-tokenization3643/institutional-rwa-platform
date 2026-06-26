@@ -1,0 +1,31 @@
+- name: architecture
+  color: "5319E7"
+  description: Protocol architecture and design decisions
+
+- name: security
+  color: "B60205"
+  description: Security reviews, threat modeling, and vulnerability fixes
+
+- name: identity
+  color: "0E8A16"
+  description: ONCHAINID, identity registry, claims, and issuers
+
+- name: bridge
+  color: "1D76DB"
+  description: Cross-chain behavior and Chainlink CCIP integration
+
+- name: erc3643
+  color: "0052CC"
+  description: ERC-3643 token behavior and compliance integration
+
+- name: testing
+  color: "FBCA04"
+  description: Foundry tests, coverage, fuzzing, and invariants
+
+- name: documentation
+  color: "0075CA"
+  description: Documentation, ADRs, and developer guidance
+
+- name: good first issue
+  color: "7057FF"
+  description: Well-scoped task suitable for first-time contributors
