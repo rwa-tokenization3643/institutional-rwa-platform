@@ -5,6 +5,7 @@ Read the following before generating code:
 1. PROJECT_CONTEXT.md
 2. docs/Architecture.md
 3. docs/CodingStandards.md
+4. The relevant module specification in docs/specs/
 
 Implement ONLY the requested module.
 

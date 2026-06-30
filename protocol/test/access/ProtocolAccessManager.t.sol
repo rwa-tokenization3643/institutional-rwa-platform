@@ -4,8 +4,8 @@ pragma solidity 0.8.30;
 import {IAccessControl} from "@openzeppelin/contracts/access/IAccessControl.sol";
 import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
 import {Test} from "forge-std/Test.sol";
-import {IProtocolAccessManager} from "../../src/access/IProtocolAccessManager.sol";
-import {ProtocolAccessManager} from "../../src/access/ProtocolAccessManager.sol";
+import {IProtocolAccessManager} from "../../contracts/access/IProtocolAccessManager.sol";
+import {ProtocolAccessManager} from "../../contracts/access/ProtocolAccessManager.sol";
 
 contract ProtocolAccessManagerTest is Test {
     ProtocolAccessManager private accessManager;

@@ -1,0 +1,62 @@
+[
+  {
+    "title": "Repository Bootstrap",
+    "status": "complete",
+    "labels": ["architecture", "documentation"],
+    "body": "Bootstrap the repository structure, project context, roadmap, documentation layout, ADRs, labels, and Foundry protocol workspace.\n\nStatus: complete."
+  },
+  {
+    "title": "Access Manager",
+    "status": "complete",
+    "labels": ["architecture", "security", "testing"],
+    "body": "Implement the ProtocolAccessManager module with OpenZeppelin AccessControl, protocol roles, specification, and Foundry tests.\n\nStatus: complete."
+  },
+  {
+    "title": "Identity Layer",
+    "status": "open",
+    "labels": ["identity", "erc3643", "testing"],
+    "body": "Implement the identity layer, including Identity Registry, Trusted Issuers, Claim Topics, and Identity Factory modules.\n\nStatus: open."
+  },
+  {
+    "title": "Compliance Engine",
+    "status": "open",
+    "labels": ["security", "erc3643", "testing"],
+    "body": "Implement the compliance engine, rule engine, country rules, holding rules, investor rules, and module-level tests.\n\nStatus: open."
+  },
+  {
+    "title": "ERC-3643 Token",
+    "status": "open",
+    "labels": ["erc3643", "security", "testing"],
+    "body": "Implement the lightweight ERC-3643 token core using identity and compliance modules for regulated transfer checks.\n\nStatus: open."
+  },
+  {
+    "title": "Partition Manager",
+    "status": "open",
+    "labels": ["erc3643", "architecture", "testing"],
+    "body": "Implement the ERC-1400 inspired partition manager as an extension module without making partitions the token core.\n\nStatus: open."
+  },
+  {
+    "title": "Chainlink CCIP Bridge",
+    "status": "open",
+    "labels": ["bridge", "security", "testing"],
+    "body": "Implement the bridge adapter and CCIP receiver for compliant cross-chain RWA transfers.\n\nStatus: open."
+  },
+  {
+    "title": "Chainlink ACE Adapter",
+    "status": "open",
+    "labels": ["security", "erc3643", "testing"],
+    "body": "Implement the Chainlink ACE adapter and connect it to compliance workflows through a stable module interface.\n\nStatus: open."
+  },
+  {
+    "title": "Corporate Actions",
+    "status": "open",
+    "labels": ["architecture", "security", "testing"],
+    "body": "Implement corporate action modules for issuer-driven lifecycle events such as distributions, redemptions, recalls, splits, and conversions.\n\nStatus: open."
+  },
+  {
+    "title": "SDK",
+    "status": "open",
+    "labels": ["documentation", "testing"],
+    "body": "Build the SDK for application integrations, typed contract access, and developer workflows.\n\nStatus: open."
+  }
+]
