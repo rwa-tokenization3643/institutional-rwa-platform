@@ -139,6 +139,54 @@ library ProtocolTypes {
         TIMEOUT
     }
 
+    /// @notice Delivery status of a cross-chain transport message.
+    /// @dev Used by ITransportProvider.getMessageStatus() to report transport
+    ///      layer outcomes without conflating them with settlement results.
+    enum TransportStatus {
+        /// @dev Message has been submitted but delivery is not yet confirmed.
+        PENDING,
+        /// @dev Message was successfully delivered to the destination chain.
+        DELIVERED,
+        /// @dev Message delivery failed permanently.
+        FAILED,
+        /// @dev Message delivery timed out before confirmation.
+        TIMED_OUT,
+        /// @dev Message was cancelled before delivery completed.
+        CANCELLED
+    }
+
+    /// @notice Flags that describe compliance policy provider capabilities.
+    /// @dev Values correspond to bit positions in the uint256 bitmask
+    ///      returned by `ICompliancePolicyProvider.getCapabilities()`.
+    enum ComplianceCapability {
+        /// @dev Provider can evaluate a full TransferIntent.
+        TRANSFER_EVALUATION,
+        /// @dev Provider supports multiple policy versions.
+        POLICY_VERSIONING,
+        /// @dev Provider supports batch evaluation of multiple intents.
+        BATCH_EVALUATION,
+        /// @dev Provider supports off-chain oracle-backed policies.
+        ORACLE_POLICY
+    }
+
+    /// @notice Flags that describe transport provider capabilities.
+    /// @dev Values correspond to bit positions in the uint256 bitmask
+    ///      returned by `ITransportProvider.getCapabilities()`.
+    enum TransportCapability {
+        /// @dev Provider supports fee estimation.
+        FEE_ESTIMATION,
+        /// @dev Provider supports per-message delivery status queries.
+        MESSAGE_STATUS,
+        /// @dev Provider supports payload verification (e.g. signature checks).
+        PAYLOAD_VERIFICATION,
+        /// @dev Provider supports manual retry of failed messages.
+        MANUAL_RETRY,
+        /// @dev Provider supports batching multiple messages in a single transport.
+        MESSAGE_BATCHING,
+        /// @dev Provider supports fallback delivery via an alternative route.
+        FALLBACK_DELIVERY
+    }
+
     // =========================================================================
     // Structs
     // =========================================================================
@@ -253,11 +301,11 @@ library ProtocolTypes {
     /// @notice Canonical cross-chain transport envelope.
     /// @dev This payload MUST be transport-agnostic — it must work equally
     ///      well with Chainlink CCIP, LayerZero, Hyperlane, and Axelar.
-    ///      No provider-specific fields (e.g., gas limits, fees, provider
+    ///      No provider-specific fields (e.g., gas limits, fees, transport
     ///      nonces) are included. The transport protocol is identified by
     ///      `transportId` so downstream code (e.g. RecoveryManager) can
     ///      distinguish the origin bridge without coupling to its API.
-    struct BridgeMessage {
+    struct TransportMessage {
         /// @dev Message envelope schema version (currently `1`). Independent
         ///      of `protocolVersion` — messages and protocol schemas evolve
         ///      on separate cadences.
@@ -269,7 +317,7 @@ library ProtocolTypes {
         MessageType messageType;
         /// @dev Settlement phase for transfer-related messages.
         SettlementPhase phase;
-        /// @dev Globally unique message identifier assigned by the bridge
+        /// @dev Globally unique message identifier assigned by the transport
         ///      provider.
         bytes32 messageId;
         /// @dev Intent this message references (`bytes32(0)` for non-transfer
