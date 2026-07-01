@@ -265,7 +265,7 @@ contract TransferIntentManager is ITransferIntentManager, ERC165 {
 
         if (current == ProtocolTypes.SettlementState.VALIDATED) {
             if (
-                next == ProtocolTypes.SettlementState.SETTLING
+                next == ProtocolTypes.SettlementState.RESERVED
                     || next == ProtocolTypes.SettlementState.SETTLED
                     || next == ProtocolTypes.SettlementState.EXPIRED
                     || next == ProtocolTypes.SettlementState.REJECTED
@@ -275,10 +275,11 @@ contract TransferIntentManager is ITransferIntentManager, ERC165 {
             revert TransferIntentManager__InvalidStateTransition(current, next);
         }
 
-        if (current == ProtocolTypes.SettlementState.SETTLING) {
+        if (current == ProtocolTypes.SettlementState.RESERVED) {
             if (
                 next == ProtocolTypes.SettlementState.SETTLED
                     || next == ProtocolTypes.SettlementState.ROLLED_BACK
+                    || next == ProtocolTypes.SettlementState.EXPIRED
             ) {
                 return;
             }

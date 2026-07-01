@@ -44,18 +44,21 @@ library ProtocolTypes {
         PENDING_VALIDATION,
         /// @dev Phase 1 passed; destination chain has approved the intent.
         VALIDATED,
-        /// @dev Phase 2 started; source chain has burned tokens, awaiting
-        ///      destination mint confirmation.
-        SETTLING,
-        /// @dev Transfer completed; destination chain has minted tokens.
+        /// @dev Source chain has reserved (locked) the sender's tokens and
+        ///      dispatched the settlement instruction. Awaiting destination
+        ///      mint confirmation before burning.
+        RESERVED,
+        /// @dev Transfer completed; destination chain has minted tokens and
+        ///      source chain has burned the reserved tokens.
         SETTLED,
         /// @dev Phase 1 rejected by the destination chain or force-cancelled
         ///      by an authorized role.
         REJECTED,
         /// @dev Deadline reached before the intent could be settled.
         EXPIRED,
-        /// @dev Phase 2 failed and has been rolled back; tokens re-minted on
-        ///      the source chain.
+        /// @dev Settlement failed and has been rolled back; reserved tokens
+        ///      released on the source chain (no re-mint needed since burn
+        ///      had not yet executed).
         ROLLED_BACK
     }
 

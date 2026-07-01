@@ -23,10 +23,10 @@ import {ProtocolTypes} from "../common/ProtocolTypes.sol";
 ///
 ///      The AssetAdapter is responsible for:
 ///        * Validating that an asset exists and partitions are supported.
-///        * Reserving or locking assets to prevent double-spending during
-///          the Phase 1 validation window.
-///        * Releasing reservations when validation fails or the intent
-///          expires without settlement.
+///        * Reserving assets after destination approval (Phase 2) to
+///          prevent double-spending between reservation and burn.
+///        * Releasing reservations when settlement fails or rollback
+///          recovery is needed.
 ///        * Burning reserved assets on the source chain during Phase 2.
 ///        * Minting assets to recipients on the destination chain.
 ///        * Re-minting assets on the source chain during rollback recovery.
@@ -112,13 +112,15 @@ interface IAssetAdapter is IERC165 {
     // Reservation
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice Reserves an amount of an asset for a pending transfer intent,
-    ///         preventing the sender from spending or transferring those
-    ///         tokens during the Phase 1 validation window.
-    /// @dev    MUST be idempotent — calling twice with the same intent MUST
-    ///         NOT double-reserve. Implementations SHOULD store a
-    ///         reservation per `intentId` so they can later release or burn
-    ///         the exact reserved quantity.
+    /// @notice Reserves an amount of an asset for a transfer intent during
+    ///         Phase 2 settlement, preventing double-spending between
+    ///         reservation and burn.
+    /// @dev    Reservation happens only after the destination chain has
+    ///         approved the intent (both sides agree), reducing lock
+    ///         contention during Phase 1 validation. MUST be idempotent —
+    ///         calling twice with the same intent MUST NOT double-reserve.
+    ///         Implementations SHOULD store a reservation per `intentId`
+    ///         so they can later release or burn the exact reserved quantity.
     /// @param  intent  The transfer intent requiring a reservation.
     /// @return reserved True if the reservation was created or already
     ///                  existed (idempotent).
@@ -128,8 +130,9 @@ interface IAssetAdapter is IERC165 {
 
     /// @notice Releases a previously created asset reservation.
     /// @dev    MUST succeed as a no-op if the reservation does not exist
-    ///         (e.g. already released, never created). Called when Phase 1
-    ///         validation fails or the intent expires.
+    ///         (e.g. already released, never created). Called when Phase 2
+    ///         settlement fails after reservation but before burn, or when
+    ///         recovery rollback is needed.
     /// @param  intent   The transfer intent whose reservation to release.
     /// @return released True if a reservation was released, false if no
     ///                  reservation existed (no-op).

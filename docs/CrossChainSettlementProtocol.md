@@ -17,7 +17,7 @@
 
 ## Problem Statement
 
-The current cross-chain architecture commits sender value before destination acceptance:
+A naive cross-chain architecture commits sender value before destination acceptance:
 
 ```
 Sender validation → BURN (irrevocable) → CCIP → Receiver validation → MINT (may fail)
@@ -27,6 +27,11 @@ For institutional settlement this is unacceptable. Participants must know the co
 and compliance checks pass on both sides before any value moves. This document defines a
 two-phase settlement protocol that mirrors SWIFT, securities settlement, and Delivery-vs-Payment
 workflows.
+
+A second design consideration is lock contention. Reserving assets during Phase 1 —
+before the destination accepts — wastes locked liquidity if the destination rejects or
+the transport fails. This protocol defers asset reservation to Phase 2, after both sides
+agree, dramatically reducing lock contention while still preventing double-spending.
 
 The protocol is an extension layer. It does not modify vendored ERC-3643, ONCHAINID,
 Chainlink CCIP, or Chainlink ACE contracts.
@@ -128,9 +133,9 @@ Recovery path (Phase 2 failure):
 | `PENDING_VALIDATION` | `VALIDATED` | Destination chain approves intent via CCIP | No |
 | `PENDING_VALIDATION` | `REJECTED` | Destination chain rejects intent via CCIP | No |
 | `PENDING_VALIDATION` | `EXPIRED` | `createdAt + expiry` reached | No |
-| `VALIDATED` | `SETTLING` | Settlement initiated on source chain | No (burn starts) |
-| `SETTLING` | `SETTLED` | Destination CCIP receiver confirms mint | Yes |
-| `SETTLING` | `ROLLED_BACK` | Bridge operator invokes rollback after destination failure | Yes (recovery) |
+| `VALIDATED` | `RESERVED` | Tokens locked on source after destination approval | No |
+| `RESERVED` | `SETTLED` | Source burns locked tokens on SETTLEMENT_ACK | Yes |
+| `RESERVED` | `ROLLED_BACK` | Operator releases reservation after destination failure | No (recovery) |
 | `VALIDATED` | `EXPIRED` | `createdAt + expiry` reached before settlement | No |
 | `VALIDATED` | `REJECTED` | Compliance officer or bridge operator cancels | No |
 | `REJECTED` | (terminal) | - | No |
@@ -151,7 +156,7 @@ trade confirmation before settlement.
 ```text
 User          SettlementCoordinator     Source Identity    Source Compliance     CCIP      Dest SettlementCoordinator     Dest Identity    Dest Compliance
  │                     │                       │                  │              │                │                          │                  │
- │-- initiateIntent -->│                       │                  │              │                │                          │                  │
+ │-- submitTransfer -->│                       │                  │              │                │                          │                  │
  │  (dest, to, amt)    │                       │                  │              │                │                          │                  │
  │                     │                       │                  │              │                │                          │                  │
  │                     │-- validateSender ----->│                  │              │                │                          │                  │
@@ -163,12 +168,9 @@ User          SettlementCoordinator     Source Identity    Source Compliance    
  │                     │   + ACEAdapter        │                  │              │                │                          │                  │
  │                     │<-- compliance ok -----│                  │              │                │                          │                  │
  │                     │                       │                  │              │                │                          │                  │
- │                     │-- checkBalance ------>│   (Token)        │              │                │                          │                  │
- │                     │   (balance >= amt)    │                  │              │                │                          │                  │
- │                     │<-- balance ok --------│                  │              │                │                          │                  │
- │                     │                       │                  │              │                │                          │                  │
  │                     │ Creates TransferIntent                    │              │                │                          │                  │
  │                     │ state=PENDING_VALIDATION                  │              │                │                          │                  │
+ │                     │ (no reservation — deferred to Phase 2)    │              │                │                          │                  │
  │                     │                       │                  │              │                │                          │                  │
  │                     │-- sendValidateIntent ->│                  │--- msg ---->│                          │                  │
  │                     │  (CCIP)                │                  │              │-- receiveValidateIntent ->│                  │
@@ -183,11 +185,9 @@ User          SettlementCoordinator     Source Identity    Source Compliance    
  │                     │                       │                  │              │    + ACEAdapter          │                  │
  │                     │                       │                  │              │    <-- compliance ok ----│                  │
  │                     │                       │                  │              │                           │                  │
- │                     │                       │                  │              │    -- checkHoldingLimits-> │   (Partition)   │
- │                     │                       │                  │              │    <-- holding ok -------│                  │
- │                     │                       │                  │              │                           │                  │
- │                     │                       │                  │              │    Intent stored locally │                  │
- │                     │                       │                  │              │    state=PENDING_LOCAL   │                  │
+ │                     │                       │                  │              │    Creates local intent  │                  │
+ │                     │                       │                  │              │    state=VALIDATED       │                  │
+ │                     │                       │                  │              │    (no reservation)      │                  │
  │                     │                       │                  │              │                           │                  │
  │                     │                       │                  │              │-- sendIntentApproval --->│                  │
  │                     │                       │                  │<--- msg -----│   (intentId, approved)   │                  │
@@ -233,21 +233,19 @@ This is the institutional equivalent of SWIFT MT202 settlement or DvP delivery.
 ```text
 User/Relayer     SettlementCoordinator     Source Token     CCIP        Dest SettlementCoordinator     Dest Token
  │                       │                     │              │                 │                         │
- │-- settleIntent ------>│                     │              │                 │                         │
- │  (intentId)           │                     │              │                 │                         │
- │                       │                     │              │                 │                         │
- │                       │-- validateState --->│              │                 │                         │
- │                       │   (state=VALIDATED) │              │                 │                         │
- │                       │   (expiry not hit)  │              │                 │                         │
- │                       │   (balance >= amt)  │              │                 │                         │
- │                       │<-- state ok --------│              │                 │                         │
+ │  (handled by          │                     │              │                 │                         │
+ │   handleTransportMsg  │                     │              │                 │                         │
+ │   on APPROVED)        │                     │              │                 │                         │
  │                       │                     │              │                 │                         │
  │                       │-- transitionState ->│              │                 │                         │
- │                       │   state=SETTLING    │              │                 │                         │
+ │                       │   state=VALIDATED   │              │                 │                         │
  │                       │                     │              │                 │                         │
- │                       │-- burn(recip,amt) ->│              │                 │                         │
- │                       │   (via BURNER_ROLE) │              │                 │                         │
- │                       │<-- burn ok ---------│              │                 │                         │
+ │                       │-- reserveAssets --->│              │                 │                         │
+ │                       │   (lock tokens)     │              │                 │                         │
+ │                       │<-- reserved ok -----│              │                 │                         │
+ │                       │                     │              │                 │                         │
+ │                       │-- transitionState ->│              │                 │                         │
+ │                       │   state=RESERVED    │              │                 │                         │
  │                       │                     │              │                 │                         │
  │                       │-- sendSettleIntent >│-- msg ------>│                         │
  │                       │   (intentId)        │              │-- receiveSettle --->│         │
@@ -264,6 +262,10 @@ User/Relayer     SettlementCoordinator     Source Token     CCIP        Dest Set
  │                       │                     │              │-- sendSettlementAck>│          │
  │                       │<-- receiveAck ------│<--- msg -----│  (intentId)         │          │
  │                       │                     │              │                     │          │
+ │                       │-- burn(recip,amt) ->│              │                     │          │
+ │                       │   (via BURNER_ROLE) │              │                     │          │
+ │                       │<-- burn ok ---------│              │                     │          │
+ │                       │                     │              │                     │          │
  │                       │ state=SETTLED       │              │                     │          │
  │                       │                     │              │                     │          │
  │<-- IntentSettled -----│                     │              │                     │          │
@@ -272,26 +274,40 @@ User/Relayer     SettlementCoordinator     Source Token     CCIP        Dest Set
 
 ### Settlement Invocation
 
-Settlement may be invoked by:
-1. **The user** who initiated the intent (after receiving confirmation that Phase 1 passed).
-2. **A relayer** operated by the Bridge Operator that monitors `VALIDATED` intents and settles them automatically.
-3. **The backend API** after off-chain compliance review.
+Settlement is triggered automatically when the source chain receives an APPROVED
+validation response from the destination. The `_handleValidationResponse` function:
 
-The gas cost of settlement is borne by the invoker. For relayers, the protocol may
-offer a small gas rebate or the user pre-pays gas in a relayer contract.
+1. Transitions the intent to `VALIDATED`.
+2. Reserves the sender's tokens (locking them).
+3. Transitions to `RESERVED` and dispatches the settlement instruction.
+
+The reserved tokens are NOT burned here — burning happens only after the
+destination confirms successful mint via `SETTLEMENT_ACK`. This ensures tokens
+are never destroyed unless delivery is confirmed.
+
+There is no separate user-invoked `settleIntent` step — settlement begins as soon
+as both sides agree. If reservation fails (sender no longer has sufficient balance),
+the intent transitions to `REJECTED` and the sender must submit a new intent.
 
 ### Balance Check at Settlement Time
 
-The `settleIntent` function checks that the sender still has a sufficient balance at
-settlement time. If the sender moved tokens between Phase 1 and Phase 2:
+Because assets are not reserved during Phase 1, the sender retains full use of
+their tokens during the validation window. Balance is checked at settlement
+initiation when the destination's approval arrives:
 
-1. `settleIntent` reverts with `InsufficientBalance`.
-2. The intent remains in `VALIDATED` state.
-3. The sender can acquire tokens and retry settlement, or explicitly cancel the intent.
+1. `_handleValidationResponse` transitions the intent to `VALIDATED` and calls
+   `reserveAssets` to check the sender's current balance.
+2. If the sender moved tokens between Phase 1 and Phase 2, `reserveAssets`
+   fails and the intent transitions to `REJECTED`.
+3. The sender can acquire tokens and submit a new intent.
 
 This avoids locking tokens during Phase 1 while still guaranteeing the destination
 will accept at settlement time. The risk exposure is bounded to the Phase 1 window,
 which is configurable (recommended: 24 hours).
+
+If reservation fails after destination approval, the destination-side intent
+remains in VALIDATED and will eventually expire. No recovery message is needed —
+no value has moved on either chain.
 
 ---
 
@@ -320,9 +336,9 @@ which is configurable (recommended: 24 hours).
       │         │ Settlement initiated
       │         ▼
       │  ┌──────────────┐
-      │  │  SETTLING    │
-      │  │  • Burn executed on source
-      │  │  • CCIP settlement sent
+      │  │   RESERVED   │
+      │  │  • Tokens locked on source
+      │  │  • Settlement instruction sent
       │  └──────┬───────┘
       │         │
       │    ┌────┴────┐
@@ -407,7 +423,7 @@ same transfer parameters multiple times.
 - The destination `SettlementCCIPReceiver` stores processed `intentId` values and
   rejects duplicates.
 - Phase 2 settlement messages reference `intentId` and the destination verifies
-  the intent is in the expected state (`PENDING_LOCAL` → `SETTLING` on destination).
+  the intent is in the expected state (`VALIDATED` on destination).
 
 ### Nonce Per Sender
 
@@ -672,7 +688,7 @@ All events are indexed for off-chain monitoring, audit, and reconciliation.
 User         Source              Source     Source        CCIP        Dest            Dest      Dest
              SettlementCoord     Identity   Compliance               SettlementCoord  Identity  Compliance
  │                  │               │           │           │             │              │          │
- │  initiateIntent  │               │           │           │             │              │          │
+ │  submitTransfer  │               │           │           │             │              │          │
  │ ────────────────>│               │           │           │             │              │          │
  │  (to, amt)       │               │           │           │             │              │          │
  │                  │               │           │           │             │              │          │
@@ -682,56 +698,50 @@ User         Source              Source     Source        CCIP        Dest      
  │      █            │<─ idOk ---│           │           │             █              │          │
  │      █            │─ chkCompl>│           │           │             █              │          │
  │      █            │<─ compOk ─│           │           │             █              │          │
- │      █            │─ chkBal ->│           │           │             █              │          │
- │      █            │<─ balOk ──│           │           │             █              │          │
  │      █            │           │           │           │             █              │          │
  │      █            │ intent=PENDING_VALID  │           │             █              │          │
+ │      █            │ (no reservation)      │           │             █              │          │
  │      █            │           │           │           │             █              │          │
  │      █            │── sendValidateIntent ─│── msg ───>│─ receive ─>█              │          │
  │      █            │           │           │           │             █── chkRecip->│          │
  │      █            │           │           │           │             █<─ idOk -----│          │
  │      █            │           │           │           │             █── chkCompl─>│          │
  │      █            │           │           │           │             █<─ compOk ---│          │
- │      █            │           │           │           │             █── chkHold ─>│          │
- │      █            │           │           │           │             █<─ holdOk ---│          │
  │      █            │           │           │           │             █             │          │
- │      █            │           │           │           │             █ local=PENDING_LOCAL  │
- │      █            │           │           │           │             █             │          │
+ │      █            │           │           │           │             █ local=VALIDATED       │
+ │      █            │           │           │           │             █ (no reservation)      │
  │      █            │           │           │           │<── approved ─█             │          │
  │      █            │<────── approval ──────│<── msg ───│             █              │          │
  │      █            │           │           │           │             █              │          │
  │      █████████████  Phase 1 complete  ████████████████████████████████████████████████       │
  │                  │           │           │           │             │              │          │
- │<─ IntentConfirmed│ intent=VALIDATED      │           │             │              │          │
- │                  │           │           │           │             │              │          │
+ │<─ IntentConfirmed│           │           │           │             │              │          │
  │                  │           │           │           │             │              │          │
  │      █████████████  Phase 2  ████████████████████████████████████████████████████████████       │
- │                  │           │           │           │             │              │          │
- │ settleIntent     │           │           │           │             │              │          │
- │ ────────────────>│           │           │           │             │              │          │
- │                  │─ chkState>│           │           │             │              │          │
- │                  │<─ ok -----│           │           │             │              │          │
- │                  │─ chkBal ->│(Token)    │           │             │              │          │
- │                  │<─ balOk --│           │           │             │              │          │
- │                  │           │           │           │             │              │          │
- │                  │ state=SETTLING        │           │             │              │          │
- │                  │           │           │           │             │              │          │
- │                  │── burn() ────>│       │           │             │              │          │
- │                  │<─ ok ─────────│       │           │             │              │          │
- │                  │           │           │           │             │              │          │
- │                  │── sendSettle ─────────│── msg ───>│─ receive ──>│              │          │
- │                  │           │           │           │             │── mint() ──────────────>│
- │                  │           │           │           │             │<─ ok ───────────────────│
- │                  │           │           │           │             │             │          │
- │                  │           │           │           │             │ state=SETTLED_LOCAL    │
- │                  │           │           │           │             │             │          │
- │                  │           │           │           │<── ack ─────│             │          │
- │                  │<──────── ack ─────────│<── msg ───│             │              │          │
- │                  │           │           │           │             │              │          │
- │                  │ state=SETTLED         │           │             │              │          │
- │                  │           │           │           │             │              │          │
- │<─ IntentSettled ─│           │           │           │             │              │          │
- │                  │           │           │           │             │              │          │
+ │      █            │           │           │           │             █              │          │
+ │      █            │ state=VALIDATED       │           │             █              │          │
+ │      █            │           │           │           │             █              │          │
+ │      █            │── reserveAssets() ──>│(Token)    │             █              │          │
+ │      █            │<─ ok ─---------------│           │             █              │          │
+ │      █            │           │           │           │             █              │          │
+ │      █            │ state=RESERVED         │           │             █              │          │
+ │      █            │           │           │           │             █              │          │
+ │      █            │── sendSettle ─────────│── msg ───>│─ receive ──>█              │          │
+ │      █            │           │           │           │             █── mint() ──────────────>│
+ │      █            │           │           │           │             █<─ ok ───────────────────│
+ │      █            │           │           │           │             █             │          │
+ │      █            │           │           │           │             █ state=SETTLED_LOCAL    │
+ │      █            │           │           │           │             █             │          │
+ │      █            │           │           │           │<── ack ─────█             │          │
+ │      █            │<──────── ack ─────────│<── msg ───│             █              │          │
+ │      █            │           │           │           │             █              │          │
+ │      █            │── burn() ────>│       │           │             █              │          │
+ │      █            │<─ ok ─────────│       │           │             █              │          │
+ │      █            │           │           │           │             █              │          │
+ │      █            │ state=SETTLED         │           │             █              │          │
+ │      █            │           │           │           │             █              │          │
+ │<─ IntentSettled ─│           │           │           │             █              │          │
+ │      █            │           │           │           │             █              │          │
  │      █████████████  Settlement complete ████████████████████████████████████████████████       │
 ```
 
@@ -740,10 +750,8 @@ User         Source              Source     Source        CCIP        Dest      
 ```text
 User        Source SettlementCoord     Source Compliance     CCIP      Dest SettlementCoord    Dest Compliance
  │                    │                      │                │               │                    │
- │ initiateIntent     │                      │                │               │                    │
+ │ submitTransfer     │                      │                │               │                    │
  │ ──────────────────>│                      │                │               │                    │
- │                    │── validateSender ---─>│               │               │                    │
- │                    │<── ok ───────────────│                │               │                    │
  │                    │── checkSourceCompl ──>│               │               │                    │
  │                    │<── ok ───────────────│                │               │                    │
  │                    │                      │                │               │                    │
@@ -759,6 +767,8 @@ User        Source SettlementCoord     Source Compliance     CCIP      Dest Sett
  │                    │<── rejection ────────│<── msg ───────│              │                    │
  │                    │                      │                │               │                    │
  │                    │ state=REJECTED       │                │               │                    │
+ │                    │ (no release needed —  │                │               │                    │
+ │                    │  no reservation made) │                │               │                    │
  │                    │                      │                │               │                    │
  │<── IntentRejected ─│                      │                │               │                    │
  │    (reasonCode)    │                      │                │               │                    │
@@ -771,9 +781,7 @@ User/Relayer   Source SCoord     Source Token   CCIP      Dest SCoord     Dest T
  │                   │               │          │             │               │               │
  │ settleIntent      │               │          │             │               │               │
  │ ─────────────────>│               │          │             │               │               │
- │                   │ state=SETTLING│          │             │               │               │
- │                   │-- burn() ---->│          │             │               │               │
- │                   │<-- ok --------│          │             │               │               │
+ │                   │ state=RESERVED │          │             │               │               │
  │                   │               │          │             │               │               │
  │                   │-- sendSettle ─│── msg ──>│-- receive >│               │               │
  │                   │               │          │             │-- mint() ────>│               │
@@ -790,14 +798,10 @@ User/Relayer   Source SCoord     Source Token   CCIP      Dest SCoord     Dest T
  │ Bridge Operator   │               │          │             │               │               │
  │ ─────────────────>│               │          │             │               │               │
  │ rollbackIntent()  │               │          │             │               │               │
- │                   │-- verifyBurn >│          │             │               │               │
- │                   │<-- confirmed -│          │             │               │               │
  │                   │               │          │             │               │               │
- │                   │               │          │             │               │               │
- │                   │-- requestReMint(intentId, sender, amt) ──────────────>│               │
- │                   │               │          │             │               │-- mint() ---->│
- │                   │               │          │             │               │   (canonical) │
- │                   │               │          │             │               │<-- ok --------│
+ │                   │-- releaseReservation(intentId) ->│     │               │               │
+ │                   │   (unlock, no re-mint needed)     │     │               │               │
+ │                   │<-- ok ---------------------------│     │               │               │
  │                   │               │          │             │               │               │
  │                   │ state=ROLLED_BACK       │             │               │               │
  │                   │               │          │             │               │               │
@@ -821,12 +825,12 @@ Off-Chain Monitor          Source SCoord               Dest SCoord
      │                            │                          │
      │                            │                          │
      │-- queryIntent(id2) ------->│                          │
-     │<-- state=SETTLING ---------│                          │
+     │<-- state=RESERVED ---------│                          │
      │                            │                          │
      │                  -- queryIntent(id2) ---------------->│
      │                  <-- state=PENDING_LOCAL -------------│
      │                            │                          │
-     │  MISMATCH: source burned but dest not minted.         │
+     │  MISMATCH: source locked but dest not minted.         │
      │  → Alert Bridge Operator for retry or rollback.       │
 ```
 

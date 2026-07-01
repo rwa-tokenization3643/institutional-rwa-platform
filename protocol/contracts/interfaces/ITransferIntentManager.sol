@@ -22,12 +22,13 @@ import {ProtocolTypes} from "../common/ProtocolTypes.sol";
 ///      | PENDING_VALIDATION      | VALIDATED           | Destination approves                 |
 ///      | PENDING_VALIDATION      | REJECTED            | Destination rejects                  |
 ///      | PENDING_VALIDATION      | EXPIRED             | Deadline reached                     |
-///      | VALIDATED               | SETTLING            | Settlement initiated (burn starts)   |
+///      | VALIDATED               | RESERVED            | Tokens reserved, instruction sent    |
 ///      | VALIDATED               | SETTLED             | Destination chain completes mint     |
 ///      | VALIDATED               | EXPIRED             | Deadline reached before settlement   |
-///      | VALIDATED               | REJECTED            | Compliance officer or operator force-cancels |
-///      | SETTLING                | SETTLED             | Source chain receives settlement ack |
-///      | SETTLING                | ROLLED_BACK         | Operator invokes rollback after failure      |
+///      | VALIDATED               | REJECTED            | Reservation failed or force-cancelled |
+///      | RESERVED                | SETTLED             | Source burns reserved tokens on ack  |
+///      | RESERVED                | ROLLED_BACK         | Reservation released after failure   |
+///      | RESERVED                | EXPIRED             | Deadline reached before ack          |
 ///
 ///      All other transitions MUST revert. Terminal states (SETTLED,
 ///      REJECTED, EXPIRED, ROLLED_BACK) cannot transition further.

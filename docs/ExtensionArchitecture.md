@@ -305,7 +305,7 @@ Orchestrates two-phase cross-chain settlement. Internally decomposed into three
 sub-components for separation of concerns:
 
 - **TransferIntentManager:** Manages `TransferIntent` lifecycle, persistent storage,
-  and state transitions (`PENDING_VALIDATION` → `VALIDATED` → `SETTLING` →
+  and state transitions (`PENDING_VALIDATION` → `VALIDATED` → `RESERVED` →
   `SETTLED` / `ROLLED_BACK`).
 - **SettlementExecutor:** Executes validated transfers — burns on source chain,
   mints on destination chain, verifies supply consistency.

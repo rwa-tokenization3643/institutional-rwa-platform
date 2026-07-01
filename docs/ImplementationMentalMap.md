@@ -210,9 +210,9 @@ Failure: Phase 2 timeout → intent stays VALIDATED past deadline
   → no tokens moved (Phase 2 never executed)
 
 Failure: Phase 2 mint fails → destination reverts
-  → source is in SETTLING state, tokens already burned
+  → source is in RESERVED state, tokens locked (not burned)
   → BridgeCoordination.rollbackIntent() on canonical chain
-  → replacement tokens minted to original sender
+  → releaseReservation unlocks tokens back to sender
 ```
 
 ---

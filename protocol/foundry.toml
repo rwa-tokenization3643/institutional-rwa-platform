@@ -5,10 +5,12 @@ script = "script"
 out = "out"
 libs = ["lib"]
 allow_paths = ["../vendor"]
-solc = "0.8.30"
 optimizer = true
 optimizer_runs = 200
 remappings = [
-    "@openzeppelin/contracts/=../vendor/openzeppelin/openzeppelin-contracts/contracts/",
-    "forge-std/=lib/forge-std/src/"
+    "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+    "@onchain-id/solidity/=../vendor/onchainid/",
+    "forge-std/=lib/forge-std/src/",
+    "erc3643/=../vendor/erc3643/",
+    "onchainid/=../vendor/onchainid/"
 ]
