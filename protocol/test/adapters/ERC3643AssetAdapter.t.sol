@@ -62,8 +62,6 @@ contract ERC3643AssetAdapterTest is Test {
         adapter.configureAsset(
             ASSET_ID,
             address(token),
-            address(0x1001),  // identityRegistry
-            address(0x1002),  // compliance
             18,               // decimals
             ASSET_TYPE,
             keccak256("BURN_MINT"),
@@ -92,8 +90,6 @@ contract ERC3643AssetAdapterTest is Test {
         adapter.configureAsset(
             newId,
             address(newToken),
-            address(0x2001),
-            address(0x2002),
             18,
             keccak256("BOND"),
             keccak256("BURN_MINT"),
@@ -110,8 +106,6 @@ contract ERC3643AssetAdapterTest is Test {
         adapter.configureAsset(
             bytes32(0),
             address(token),
-            address(0x1001),
-            address(0x1002),
             18,
             ASSET_TYPE,
             keccak256("BURN_MINT"),
@@ -124,38 +118,6 @@ contract ERC3643AssetAdapterTest is Test {
         vm.expectRevert(ERC3643AssetAdapter.ERC3643Adapter__ZeroAddress.selector);
         adapter.configureAsset(
             keccak256("any"),
-            address(0),
-            address(0x1001),
-            address(0x1002),
-            18,
-            ASSET_TYPE,
-            keccak256("BURN_MINT"),
-            VENDOR_VERSION
-        );
-    }
-
-    function test_ConfigureAssetRevertsWhenIdentityRegistryZero() public {
-        vm.prank(compliance);
-        vm.expectRevert(ERC3643AssetAdapter.ERC3643Adapter__ZeroAddress.selector);
-        adapter.configureAsset(
-            keccak256("any"),
-            address(0xBEEF),
-            address(0),
-            address(0x1002),
-            18,
-            ASSET_TYPE,
-            keccak256("BURN_MINT"),
-            VENDOR_VERSION
-        );
-    }
-
-    function test_ConfigureAssetRevertsWhenComplianceZero() public {
-        vm.prank(compliance);
-        vm.expectRevert(ERC3643AssetAdapter.ERC3643Adapter__ZeroAddress.selector);
-        adapter.configureAsset(
-            keccak256("any"),
-            address(0xBEEF),
-            address(0x1001),
             address(0),
             18,
             ASSET_TYPE,
@@ -176,8 +138,6 @@ contract ERC3643AssetAdapterTest is Test {
         adapter.configureAsset(
             ASSET_ID,
             address(token),
-            address(0x1001),
-            address(0x1002),
             18,
             ASSET_TYPE,
             keccak256("BURN_MINT"),
@@ -197,8 +157,6 @@ contract ERC3643AssetAdapterTest is Test {
         adapter.configureAsset(
             keccak256("x"),
             address(1),
-            address(0x1001),
-            address(0x1002),
             18,
             ASSET_TYPE,
             keccak256("BURN_MINT"),
@@ -718,14 +676,6 @@ contract ERC3643AssetAdapterTest is Test {
 
     function test_SettlementModel() public {
         assertEq(adapter.settlementModel(ASSET_ID), keccak256("BURN_MINT"));
-    }
-
-    function test_IdentityRegistry() public {
-        assertEq(adapter.identityRegistry(ASSET_ID), address(0x1001));
-    }
-
-    function test_Compliance() public {
-        assertEq(adapter.compliance(ASSET_ID), address(0x1002));
     }
 
     function test_Decimals() public {

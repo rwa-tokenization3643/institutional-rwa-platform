@@ -18,9 +18,14 @@ import {ProtocolTypes, ChainId} from "../common/ProtocolTypes.sol";
 // files that do not satisfy it.
 //
 // Because of this incompatibility, this adapter CANNOT import the vendor's
-// `IToken.sol`, `IIdentityRegistry.sol`, or `IModularCompliance.sol`
-// interfaces directly. Instead, it declares minimal compatibility interfaces
-// below that include ONLY the functions this adapter actually calls.
+// `IToken.sol` interface directly. Instead, it declares a minimal
+// compatibility interface below that includes ONLY the functions this
+// adapter actually calls.
+//
+// The adapter does NOT import `IIdentityRegistry.sol` or
+// `IModularCompliance.sol` from the vendor — it never calls those contracts
+// directly. All identity and compliance checks are enforced by the ERC-3643
+// Token contract internally.
 //
 // This is compliant with Extension Rule 4 ("Use Public Interfaces Only") —
 // the adapter still calls vendor contracts through Solidity interfaces;
@@ -28,19 +33,20 @@ import {ProtocolTypes, ChainId} from "../common/ProtocolTypes.sol";
 // the vendor's own interface files are not importable at compile time.
 //
 // If the vendor updates to a Solidity version compatible with the protocol,
-// these local interfaces should be deleted and replaced with direct imports
-// from `vendor/erc3643/contracts/token/IToken.sol` (and related files).
+// this local interface should be deleted and replaced with a direct import
+// from `vendor/erc3643/contracts/token/IToken.sol`.
 //
-// References:
+// Reference:
 //   Vendor IToken interface:  vendor/erc3643/contracts/token/IToken.sol
-//   Vendor IIdentityRegistry: vendor/erc3643/contracts/registry/interface/IIdentityRegistry.sol
-//   Vendor IModularCompliance: vendor/erc3643/contracts/compliance/modular/IModularCompliance.sol
-//   All use pragma solidity 0.8.17 (exact).
+//   Uses pragma solidity 0.8.17 (exact).
 // =============================================================================
 
 /// @notice Minimal ERC-3643 Token interface for use by this adapter.
-/// @dev Declares only the functions the adapter calls on the Token contract.
-///      Vendor `IToken.sol` (0.8.17) is not importable at protocol pragma.
+/// @dev Declares only the functions the adapter actually calls on the Token
+///      contract. Vendor `IToken.sol` (0.8.17) is not importable at protocol
+///      pragma. The adapter does NOT call IdentityRegistry or ModularCompliance
+///      directly — all interactions go through the Token contract, which
+///      enforces identity and compliance checks internally.
 interface IERC3643Token {
     /// @notice Mints `amount` tokens to `to`.
     /// @dev Agent-only on the Token contract. Reverts if the recipient is
@@ -55,20 +61,6 @@ interface IERC3643Token {
     function balanceOf(address account) external view returns (uint256);
 }
 
-/// @notice Minimal Identity Registry interface for use by this adapter.
-/// @dev Vendor `IIdentityRegistry.sol` (0.8.17) is not importable.
-interface IIdentityRegistryMinimal {
-    /// @notice Returns whether a wallet has a verified identity.
-    function isVerified(address userAddress) external view returns (bool);
-}
-
-/// @notice Minimal Modular Compliance interface for use by this adapter.
-/// @dev Vendor `IModularCompliance.sol` (0.8.17) is not importable.
-interface IModularComplianceMinimal {
-    /// @notice Checks whether a transfer is compliant.
-    function canTransfer(address from, address to, uint256 amount) external view returns (bool);
-}
-
 // =============================================================================
 // Settlement Model Identifiers
 // =============================================================================
@@ -78,6 +70,13 @@ interface IModularComplianceMinimal {
 // in AssetConfig.settlementModel.
 //
 // Only BURN_MINT is implemented in this version.
+//
+// ── Future Centralization ──
+//
+// These constants are currently defined here (file-level) because no shared
+// protocol constants file exists yet. When a ProtocolConstants.sol (or
+// equivalent) is introduced, they should be moved there so that all adapters
+// and the SettlementCoordinator reference the same canonical identifiers.
 // =============================================================================
 
 // Burn tokens on source, mint on destination (standard cross-chain).
@@ -102,8 +101,9 @@ bytes32 constant SETTLEMENT_MODEL_ESCROW_RELEASE = keccak256("ESCROW_RELEASE");
 //
 // ── What the adapter owns ──
 //
-//   * Asset configuration (token, registry, compliance addresses per chain)
-//   * Vendor contract integration (ERC-3643, ONCHAINID via registries)
+//   * Asset configuration (token address and protocol-level metadata per chain)
+//   * Vendor contract integration (ERC-3643 token only; identity and compliance
+//     are owned and enforced by the Token contract itself)
 //   * Reservation strategy (temporary internal accounting)
 //   * Settlement strategy (dispatch by settlement model)
 //   * Recovery strategy (isolated helpers for future RecoveryManager reuse)
@@ -139,10 +139,13 @@ bytes32 constant SETTLEMENT_MODEL_ESCROW_RELEASE = keccak256("ESCROW_RELEASE");
 //
 // ── Recovery Strategy ──
 //
-// Recovery operations are isolated in private helpers (_recoverRollback,
-// _recoverRelease). Future RecoveryManager code should call these helpers
-// rather than duplicating the logic. The current design separates recovery
-// from settlement so each can evolve independently.
+// rollbackReservation() handles two cases:
+//   1. Reservation exists → burn has NOT executed → release reservation.
+//   2. No reservation     → burn already executed   → re-mint to sender.
+// The mint path delegates to the private _recoverRollback helper so that
+// future RecoveryManager code can reuse the re-mint logic without
+// duplicating it. Recovery is separated from settlement so each can
+// evolve independently.
 //
 // ── Multi-Chain Design ──
 //
@@ -211,6 +214,9 @@ contract ERC3643AssetAdapter is IAssetAdapter, ERC165 {
     /// @dev The settlement model is not implemented or not recognised.
     error ERC3643Adapter__UnsupportedSettlementModel(bytes32 model);
 
+    /// @dev The token contract is already registered under a different asset ID.
+    error ERC3643Adapter__TokenAlreadyRegistered(address token, bytes32 existingAssetId);
+
     /// @dev The reservation strategy does not match the settlement model.
     error ERC3643Adapter__InvalidReservationState(bytes32 intentId);
 
@@ -266,15 +272,12 @@ contract ERC3643AssetAdapter is IAssetAdapter, ERC165 {
     // Types
     // ═══════════════════════════════════════════════════════════════════════
 
-    /// @notice Full configuration for an asset on a specific chain.
-    /// @dev Keyed by (assetId, chainId). Each chain requires a separate entry
-    ///      because the same protocol asset may use different ERC-3643 token
-    ///      contracts and registries on different chains.
+    /// @notice Configuration for an asset on a specific chain.
+    /// @dev Keyed by (assetId, chainId). Stores only protocol-level metadata
+    ///      and the ERC-3643 token address. Vendor configuration (IdentityRegistry,
+    ///      ModularCompliance) is owned by the Token contract and retrieved
+    ///      through it when needed.
     /// @param token           The ERC-3643 token contract address on this chain.
-    /// @param identityRegistry The IdentityRegistry contract address linked
-    ///                         to the token on this chain.
-    /// @param compliance      The ModularCompliance contract address linked
-    ///                        to the token on this chain.
     /// @param decimals        Token decimals (for off-chain display).
     /// @param assetType       Asset classification (e.g. keccak256("EQUITY"),
     ///                        keccak256("BOND"), keccak256("REAL_ESTATE")).
@@ -282,8 +285,6 @@ contract ERC3643AssetAdapter is IAssetAdapter, ERC165 {
     /// @param vendorVersion   Vendor software version (e.g. keccak256("T-REX:4.1.6")).
     struct AssetConfig {
         address token;
-        address identityRegistry;
-        address compliance;
         uint8 decimals;
         bytes32 assetType;
         bytes32 settlementModel;
@@ -309,6 +310,9 @@ contract ERC3643AssetAdapter is IAssetAdapter, ERC165 {
 
     /// @notice Version of this adapter implementation.
     bytes32 public constant ADAPTER_VERSION = keccak256("ERC3643AssetAdapter:1.0.0");
+
+    /// @notice Version of the protocol schema this adapter targets.
+    bytes32 public constant PROTOCOL_VERSION = keccak256("PROTOCOL:1.0.0");
 
     /// @notice Unique identifier for this adapter type.
     bytes32 public constant ADAPTER_ID = keccak256("ERC3643AssetAdapter");
@@ -382,12 +386,12 @@ contract ERC3643AssetAdapter is IAssetAdapter, ERC165 {
     // Access: COMPLIANCE_ROLE (via ProtocolAccessManager).
 
     /// @notice Configures an asset for the chain this adapter serves.
-    /// @dev Stores the full AssetConfig keyed by (assetId, _chainId).
+    /// @dev Stores protocol-level metadata and the ERC-3643 token address.
     ///      Reverts if the asset is already configured for this chain.
+    ///      IdentityRegistry and ModularCompliance are not stored — they are
+    ///      owned and retrieved through the Token contract itself.
     /// @param assetId         Protocol-level asset identifier.
     /// @param token           ERC-3643 token contract address on this chain.
-    /// @param identityRegistry IdentityRegistry address linked to the token.
-    /// @param compliance      ModularCompliance address linked to the token.
     /// @param decimals        Token decimals.
     /// @param assetType       Asset classification identifier.
     /// @param settlementModel Settlement model identifier (e.g. BURN_MINT).
@@ -395,8 +399,6 @@ contract ERC3643AssetAdapter is IAssetAdapter, ERC165 {
     function configureAsset(
         bytes32 assetId,
         address token,
-        address identityRegistry,
-        address compliance,
         uint8 decimals,
         bytes32 assetType,
         bytes32 settlementModel,
@@ -406,16 +408,22 @@ contract ERC3643AssetAdapter is IAssetAdapter, ERC165 {
 
         if (assetId == bytes32(0)) revert ERC3643Adapter__ZeroAssetId();
         if (token == address(0)) revert ERC3643Adapter__ZeroAddress();
-        if (identityRegistry == address(0)) revert ERC3643Adapter__ZeroAddress();
-        if (compliance == address(0)) revert ERC3643Adapter__ZeroAddress();
+        if (settlementModel != SETTLEMENT_MODEL_BURN_MINT
+            && settlementModel != SETTLEMENT_MODEL_LOCK_MINT
+            && settlementModel != SETTLEMENT_MODEL_LOCK_UNLOCK
+            && settlementModel != SETTLEMENT_MODEL_ESCROW_RELEASE
+        ) {
+            revert ERC3643Adapter__UnsupportedSettlementModel(settlementModel);
+        }
         if (_configs[assetId][_chainId].token != address(0)) {
             revert ERC3643Adapter__AssetAlreadyRegistered(assetId, _chainId);
+        }
+        if (_tokenAssets[token] != bytes32(0)) {
+            revert ERC3643Adapter__TokenAlreadyRegistered(token, _tokenAssets[token]);
         }
 
         _configs[assetId][_chainId] = AssetConfig({
             token: token,
-            identityRegistry: identityRegistry,
-            compliance: compliance,
             decimals: decimals,
             assetType: assetType,
             settlementModel: settlementModel,
@@ -482,9 +490,10 @@ contract ERC3643AssetAdapter is IAssetAdapter, ERC165 {
 
         AssetConfig storage config = _getConfig(intent.assetId);
 
-        // ── Balance verification ──
+        // ── Balance verification (account for already-reserved amount) ──
         uint256 balance = IERC3643Token(config.token).balanceOf(intent.sender);
-        if (balance < intent.amount) {
+        uint256 alreadyReserved = _reservedBalances[intent.assetId][intent.sender];
+        if (balance < intent.amount + alreadyReserved) {
             return false;
         }
 
@@ -586,12 +595,24 @@ contract ERC3643AssetAdapter is IAssetAdapter, ERC165 {
     ) external override returns (bool rolledBack) {
         _onlyRole(_accessManager.BRIDGE_ROLE());
 
-        AssetConfig storage config = _getConfig(intent.assetId);
-
-        // ── Re-mint to sender per settlement model ──
-        _recoverRollback(config, intent.sender, intent.amount);
-
-        emit RollbackMintConfirmed(intent.intentId, intent.sender, intent.amount);
+        Reservation storage r = _reservations[intent.intentId];
+        if (r.sender != address(0)) {
+            // Burn has NOT executed yet — validate and release reservation.
+            if (r.sender != intent.sender
+                || r.amount != intent.amount
+                || r.assetId != intent.assetId
+            ) {
+                revert ERC3643Adapter__ReservationMismatch(intent.intentId);
+            }
+            _reservedBalances[r.assetId][r.sender] -= r.amount;
+            delete _reservations[intent.intentId];
+            emit ReservationReleased(intent.intentId);
+        } else {
+            // Burn already executed — re-mint to sender.
+            AssetConfig storage config = _getConfig(intent.assetId);
+            _recoverRollback(config, intent.sender, intent.amount);
+            emit RollbackMintConfirmed(intent.intentId, intent.sender, intent.amount);
+        }
         return true;
     }
 
@@ -652,12 +673,30 @@ contract ERC3643AssetAdapter is IAssetAdapter, ERC165 {
         return ADAPTER_ID;
     }
 
+    /// @notice Returns the protocol schema version this adapter targets.
+    /// @dev Distinct from assetVersion() (adapter implementation) and
+    ///      vendorVersion() (vendor software). Off-chain tooling can use
+    ///      this to verify compatibility between the adapter and the
+    ///      protocol schema it was compiled against.
+    /// @return version Protocol schema version identifier.
+    function protocolVersion() external pure returns (bytes32 version) {
+        return PROTOCOL_VERSION;
+    }
+
     // ═══════════════════════════════════════════════════════════════════════
     // Versioning (Non-Interface)
     // ═══════════════════════════════════════════════════════════════════════
     //
     // These functions expose version metadata beyond what IAssetAdapter
     // requires. They are available for off-chain tooling and monitoring.
+    //
+    // ── Version Breakdown ──
+    //
+    //   assetVersion()   → ADAPTER_VERSION   — adapter implementation version
+    //   protocolVersion() → PROTOCOL_VERSION  — protocol schema version
+    //   vendorVersion()   → per-asset         — vendor software version
+    //
+    // Each version is independently meaningful and none is overloaded.
 
     /// @notice Returns the chain this adapter deployment serves.
     function adapterChain() external view returns (ChainId chainId) {
@@ -683,20 +722,6 @@ contract ERC3643AssetAdapter is IAssetAdapter, ERC165 {
     /// @return model   Settlement model identifier.
     function settlementModel(bytes32 assetId) external view returns (bytes32 model) {
         return _getConfig(assetId).settlementModel;
-    }
-
-    /// @notice Returns the IdentityRegistry address for a given asset.
-    /// @param  assetId Protocol-level asset identifier.
-    /// @return registry IdentityRegistry address.
-    function identityRegistry(bytes32 assetId) external view returns (address registry) {
-        return _getConfig(assetId).identityRegistry;
-    }
-
-    /// @notice Returns the Compliance address for a given asset.
-    /// @param  assetId Protocol-level asset identifier.
-    /// @return compliance_ ModularCompliance address.
-    function compliance(bytes32 assetId) external view returns (address compliance_) {
-        return _getConfig(assetId).compliance;
     }
 
     /// @notice Returns the decimals for a given asset.
@@ -777,8 +802,9 @@ contract ERC3643AssetAdapter is IAssetAdapter, ERC165 {
     //   3. New settlement models add their recovery path here without
     //      touching the settlement dispatch.
 
-    /// @dev Re-mints tokens to the sender during rollback recovery.
-    ///      Dispatches by settlement model, mirroring the burn path.
+    /// @dev Re-mints tokens to the sender when the burn already executed
+    ///      and the destination mint failed. Dispatches by settlement model.
+    ///      Called only from the mint path of rollbackReservation().
     function _recoverRollback(AssetConfig storage config, address sender, uint256 amount) private {
         if (config.settlementModel == SETTLEMENT_MODEL_BURN_MINT) {
             IERC3643Token(config.token).mint(sender, amount);

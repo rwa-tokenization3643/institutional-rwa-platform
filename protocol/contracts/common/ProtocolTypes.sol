@@ -155,7 +155,9 @@ library ProtocolTypes {
         /// @dev Message delivery timed out before confirmation.
         TIMED_OUT,
         /// @dev Message was cancelled before delivery completed.
-        CANCELLED
+        CANCELLED,
+        /// @dev Message delivery is in progress on the destination chain.
+        PROCESSING
     }
 
     /// @notice Flags that describe compliance policy provider capabilities.
