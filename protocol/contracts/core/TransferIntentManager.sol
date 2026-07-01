@@ -266,6 +266,7 @@ contract TransferIntentManager is ITransferIntentManager, ERC165 {
         if (current == ProtocolTypes.SettlementState.VALIDATED) {
             if (
                 next == ProtocolTypes.SettlementState.SETTLING
+                    || next == ProtocolTypes.SettlementState.SETTLED
                     || next == ProtocolTypes.SettlementState.EXPIRED
                     || next == ProtocolTypes.SettlementState.REJECTED
             ) {

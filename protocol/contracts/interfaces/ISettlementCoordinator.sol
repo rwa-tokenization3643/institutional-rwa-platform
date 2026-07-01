@@ -1,0 +1,250 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.30;
+
+import {IERC165} from "@openzeppelin/contracts/utils/introspection/IERC165.sol";
+import {ChainId, ProtocolTypes} from "../common/ProtocolTypes.sol";
+import {ITransferIntentManager} from "./ITransferIntentManager.sol";
+import {ITransportProvider} from "./ITransportProvider.sol";
+import {ICompliancePolicyProvider} from "./ICompliancePolicyProvider.sol";
+import {IAssetAdapter} from "./IAssetAdapter.sol";
+
+/// @title Settlement Coordinator Interface
+/// @notice Workflow engine for the two-phase cross-chain settlement protocol.
+/// @dev The SettlementCoordinator orchestrates every step of a cross-chain
+///      transfer by delegating to four sub-components:
+///
+///      | Component              | Role                                    |
+///      |------------------------|-----------------------------------------|
+///      | ITransferIntentManager | Intent lifecycle, persistence, state    |
+///      | ICompliancePolicyProvider | Compliance evaluation (view-only)    |
+///      | IAssetAdapter          | Token-standard-agnostic asset operations |
+///      | ITransportProvider     | Cross-chain message transport           |
+///
+///      The coordinator owns workflow, NOT persistence. All settlement state
+///      (TransferRecords, lifecycle metadata) lives inside
+///      ITransferIntentManager. The coordinator reads and transitions that
+///      state through the manager's interface but never stores it locally.
+///
+///      ── Audit Trail ──
+///
+///      Failed transfer attempts are NEVER silently discarded. If compliance
+///      or asset reservation fails, the intent is created and marked REJECTED
+///      rather than reverting. This preserves an on-chain audit record of
+///      every attempted transfer, including failures — a requirement for
+///      institutional financial systems.
+///
+///      ── Orchestration Flow ──
+///
+///      ```
+///      SOURCE CHAIN                              DESTINATION CHAIN
+///      ─────────────                              ─────────────────
+///
+///      1. submitTransfer(intent)
+///         ├── createTransferIntent → PENDING_VALIDATION
+///         ├── evaluateTransferIntent
+///         │   └── if fail → transitionState → REJECTED
+///         ├── reserveAssets
+///         │   └── if fail → transitionState → REJECTED
+///         ├── transitionState → VALIDATED
+///         └── sendMessage → VALIDATION_REQUEST ──►
+///                                                  6. handleTransportMessage
+///                                                     ├── createTransferIntent
+///                                                     ├── evaluateTransferIntent
+///                                                     │   └── if fail → REJECTED, send back
+///                                                     ├── reserveAssets
+///                                                     │   └── if fail → REJECTED, send back
+///                                                     ├── transitionState → VALIDATED
+///                                                     └── sendMessage ← VALIDATION_RESPONSE
+///      2. handleTransportMessage ◄──────────────────
+///         ├── if rejected:
+///         │   ├── transitionState → REJECTED
+///         │   └── releaseReservation
+///         └── if approved:
+///             ├── check balance
+///             ├── burnReservedAssets
+///             ├── transitionState → SETTLING
+///             └── sendMessage → SETTLEMENT_INSTRUCTION ──►
+///                                                          7. handleTransportMessage
+///                                                             ├── mintAssets
+///                                                             ├── transitionState → SETTLED
+///                                                             └── sendMessage ← SETTLEMENT_ACK
+///      3. handleTransportMessage ◄──────────────────
+///         └── transitionState → SETTLED
+///
+///      RECOVERY:
+///      4. rollbackSettlement(intentId)
+///         ├── getTransferIntent (manager)
+///         ├── rollbackReservation (adapter)
+///         └── transitionState → ROLLED_BACK
+///      ```
+///
+///      All cross-chain communication flows through ITransportProvider as
+///      opaque TransportMessage envelopes. The coordinator encodes and
+///      decodes the payload; the provider only transports it.
+///
+///      ── No Vendor Exposure ──
+///
+///      The SettlementCoordinator MUST never interact with ERC-3643,
+///      ERC-1400, CCIP, ACE, or ONCHAINID contracts directly. Every
+///      interaction is mediated by one of the four sub-component interfaces.
+///
+///      ── Events & Errors ──
+///
+///      Settlement lifecycle events belong in ProtocolEvents.sol.
+///      Settlement errors belong in ProtocolErrors.sol.
+///      Both are intentionally absent from this interface.
+///
+///      Implementations MUST support ERC-165 for interface detection.
+interface ISettlementCoordinator is IERC165 {
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // User Entry
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Initiates a cross-chain transfer by submitting a
+    ///         TransferIntent.
+    /// @dev    The coordinator:
+    ///         1. Creates the TransferIntent record (state = PENDING_VALIDATION)
+    ///            via ITransferIntentManager. This step always succeeds for
+    ///            valid inputs, establishing an audit record.
+    ///         2. Evaluates compliance via ICompliancePolicyProvider.
+    ///            If this or the next step fails, the intent is transitioned
+    ///            to REJECTED and the function returns — it does NOT revert.
+    ///            The caller receives the intentId of the failed attempt.
+    ///         3. Reserves assets via IAssetAdapter.
+    ///            If this fails, same as step 2 — the intent is REJECTED.
+    ///         4. Transitions the intent to VALIDATED (source-side checks
+    ///            passed).
+    ///         5. Dispatches a Phase 1 validation request to the destination
+    ///            chain via ITransportProvider.
+    ///
+    ///         The function MUST NOT revert for compliance or reservation
+    ///         failures. The intent is created first, then evaluated;
+    ///         failures produce a REJECTED record rather than losing the
+    ///         audit trail in a revert.
+    ///
+    ///         The only revert cases are:
+    ///         - Invalid intent structure (zero intentId, zero addresses,
+    ///           zero amount, expired deadline, invalid timestamps).
+    ///         - Duplicate intentId.
+    ///         - Transport dispatch failure (e.g. invalid destination chain,
+    ///           provider misconfiguration).
+    ///
+    ///         After this function returns the intentId, the caller monitors
+    ///         the intent lifecycle. If the intent is REJECTED immediately,
+    ///         the transfer failed local checks and will not proceed. If
+    ///         VALIDATED, the destination chain's response arrives
+    ///         asynchronously through `handleTransportMessage`.
+    /// @param  intent   The fully populated transfer intent describing
+    ///                  the asset, sender, recipient, amount, partition,
+    ///                  chains, and deadline.
+    /// @return intentId The unique identifier assigned to this transfer
+    ///                  (matches `intent.intentId`). Returned for BOTH
+    ///                  successful (VALIDATED) and failed (REJECTED)
+    ///                  attempts so callers can inspect the audit record.
+    function submitTransfer(
+        ProtocolTypes.TransferIntent calldata intent
+    ) external returns (bytes32 intentId);
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Transport Callback
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Handles an inbound cross-chain message delivered by the
+    ///         TransportProvider.
+    /// @dev    The provider authenticates the source chain and sender before
+    ///         calling this function. The coordinator dispatches based on
+    ///         `message.messageType` and `message.phase`:
+    ///
+    ///         | messageType              | phase                    | Action                                              |
+    ///         |--------------------------|--------------------------|-----------------------------------------------------|
+    ///         | TRANSFER_INTENT          | VALIDATION_REQUEST       | Create intent, evaluate locally, reserve assets,     |
+    ///         |                          |                          | respond with VALIDATION_RESPONSE (approved/rejected) |
+    ///         | VALIDATION_RESPONSE      | VALIDATION_RESPONSE      | If approved → burn, transition SETTLING,             |
+    ///         |                          |                          | send SETTLEMENT_INSTRUCTION;                         |
+    ///         |                          |                          | If rejected → transition REJECTED, release assets    |
+    ///         | TRANSFER_INTENT          | SETTLEMENT_INSTRUCTION   | Mint assets to recipient, transition SETTLED,        |
+    ///         |                          |                          | respond with SETTLEMENT_ACK                          |
+    ///         | SETTLEMENT_CONFIRMATION  | SETTLEMENT_ACK           | Transition intent to SETTLED                         |
+    ///
+    ///         On the destination chain, the same audit-trail pattern
+    ///         applies: the intent is created first, then evaluated.
+    ///         Failures produce a REJECTED record and a rejection
+    ///         response back to the source.
+    ///
+    ///         The coordinator MUST verify `message.intentId` matches an
+    ///         existing local intent where applicable.
+    ///
+    ///         This function is permissionless with respect to callers
+    ///         because the TransportProvider authenticates the source.
+    ///         Implementations MAY add a guard restricting callers to the
+    ///         registered TransportProvider.
+    /// @param  sourceChain  The chain that sent the message (authenticated
+    ///                      by the TransportProvider).
+    /// @param  messageId    Provider-assigned unique message identifier.
+    /// @param  message      The decoded TransportMessage envelope.
+    function handleTransportMessage(
+        ChainId sourceChain,
+        bytes32 messageId,
+        ProtocolTypes.TransportMessage calldata message
+    ) external;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Recovery
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Rolls back a settlement whose Phase 2 mint failed on the
+    ///         destination chain.
+    /// @dev    Recovery path for the case where the source-chain burn
+    ///         succeeded but the destination-chain mint reverted or cannot
+    ///         be completed. The coordinator:
+    ///         1. Reads the TransferIntent from ITransferIntentManager.
+    ///         2. Re-mints the burned tokens to the original sender via
+    ///            IAssetAdapter.rollbackReservation().
+    ///         3. Transitions the intent to ROLLED_BACK via
+    ///            ITransferIntentManager.
+    ///
+    ///         Access control is implementation-defined (expected role:
+    ///         BRIDGE_ROLE or COMPLIANCE_ROLE).
+    ///
+    ///         Reverts if:
+    ///         - Intent is not in a recoverable state (must be SETTLING).
+    ///         - Asset rollback fails.
+    ///         - State transition fails.
+    /// @param  intentId  The identifier of the failed settlement.
+    function rollbackSettlement(
+        bytes32 intentId
+    ) external;
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Queries
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Returns the current settlement state of a transfer intent.
+    /// @dev    Delegates to ITransferIntentManager.getSettlementState().
+    /// @param  intentId Unique intent identifier.
+    /// @return state    Current SettlementState.
+    function getSettlementStatus(
+        bytes32 intentId
+    ) external view returns (ProtocolTypes.SettlementState state);
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Configuration
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// @notice Returns the configured TransferIntentManager address.
+    /// @return manager The ITransferIntentManager instance.
+    function getTransferIntentManager() external view returns (ITransferIntentManager manager);
+
+    /// @notice Returns the configured CompliancePolicyProvider address.
+    /// @return provider The ICompliancePolicyProvider instance.
+    function getComplianceProvider() external view returns (ICompliancePolicyProvider provider);
+
+    /// @notice Returns the configured AssetAdapter address.
+    /// @return adapter The IAssetAdapter instance.
+    function getAssetAdapter() external view returns (IAssetAdapter adapter);
+
+    /// @notice Returns the configured TransportProvider address.
+    /// @return provider The ITransportProvider instance.
+    function getTransportProvider() external view returns (ITransportProvider provider);
+}

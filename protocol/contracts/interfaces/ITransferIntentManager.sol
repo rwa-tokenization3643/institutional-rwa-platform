@@ -23,9 +23,10 @@ import {ProtocolTypes} from "../common/ProtocolTypes.sol";
 ///      | PENDING_VALIDATION      | REJECTED            | Destination rejects                  |
 ///      | PENDING_VALIDATION      | EXPIRED             | Deadline reached                     |
 ///      | VALIDATED               | SETTLING            | Settlement initiated (burn starts)   |
+///      | VALIDATED               | SETTLED             | Destination chain completes mint     |
 ///      | VALIDATED               | EXPIRED             | Deadline reached before settlement   |
 ///      | VALIDATED               | REJECTED            | Compliance officer or operator force-cancels |
-///      | SETTLING                | SETTLED             | Destination confirms mint            |
+///      | SETTLING                | SETTLED             | Source chain receives settlement ack |
 ///      | SETTLING                | ROLLED_BACK         | Operator invokes rollback after failure      |
 ///
 ///      All other transitions MUST revert. Terminal states (SETTLED,
