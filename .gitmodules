@@ -1,0 +1,6 @@
+[submodule "vendor/erc3643"]
+	path = vendor/erc3643
+	url = https://github.com/ERC-3643/ERC-3643.git
+[submodule "vendor/onchainid"]
+	path = vendor/onchainid
+	url = https://github.com/onchain-id/solidity.git
