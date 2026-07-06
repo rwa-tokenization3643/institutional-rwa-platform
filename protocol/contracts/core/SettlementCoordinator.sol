@@ -543,7 +543,7 @@ contract SettlementCoordinator is ISettlementCoordinator, ERC165 {
         ProtocolTypes.TransferIntent memory intent
             = _transferIntentManager.getTransferIntent(intentId);
 
-        if (_transferIntentManager.getSettlementState(intentId) != ProtocolTypes.SettlementState.VALIDATED) {
+        if (_transferIntentManager.getSettlementState(intentId) != ProtocolTypes.SettlementState.PENDING_VALIDATION) {
             return;
         }
 
