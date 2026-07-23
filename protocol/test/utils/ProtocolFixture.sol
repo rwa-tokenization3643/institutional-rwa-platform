@@ -18,6 +18,8 @@ import {ITransportProvider} from "../../contracts/interfaces/ITransportProvider.
 import {CCIPTransportProvider, ICcipRouterClient} from "../../contracts/extensions/bridge/CCIPTransportProvider.sol";
 import {MockERC3643Token} from "../mocks/MockERC3643Token.sol";
 import {MockCCIPRouter} from "../mocks/MockCCIPRouter.sol";
+import {IERC3643TokenMinimal} from "../mocks/IERC3643TokenMinimal.sol";
+import {ERC3643Deployer, ERC3643Stack, ITIR} from "./ERC3643Deployer.sol";
 
 /// @title ProtocolFixture
 /// @notice Returns a fully deployed protocol stack with all contracts wired
@@ -30,7 +32,7 @@ struct ProtocolFixture {
     RuleEngineComplianceProvider complianceProvider;
     ERC3643AssetAdapter assetAdapter;
     CCIPTransportProvider transportProvider;
-    MockERC3643Token token;
+    IERC3643TokenMinimal token;
     MockCCIPRouter router;
     ChainId chainId;
     address admin;
@@ -41,8 +43,11 @@ struct ProtocolFixture {
 /// @title ProtocolFixtureBase
 /// @notice Inherit this contract to gain access to `deployProtocol()` and
 ///         the standard configuration helpers.
-contract ProtocolFixtureBase is Test {
-    /// @notice Deploys a complete protocol stack on the current chain.
+contract ProtocolFixtureBase is ERC3643Deployer {
+    /// @notice Deploys a complete protocol stack using the mock ERC-3643 token.
+    ///         Tests that do NOT interact with ERC-3643 identity or compliance
+    ///         enforcement (e.g. conformance tests focused on protocol state
+    ///         machine) should use this function for speed and simplicity.
     /// @param  admin         Address that receives DEFAULT_ADMIN_ROLE.
     /// @param  chainId       This chain's protocol-level identifier.
     /// @param  ccipSelector  CCIP chain selector for this chain.
@@ -78,7 +83,7 @@ contract ProtocolFixtureBase is Test {
         );
 
         // ── 5. MockERC3643Token (offset +4) ──
-        fixture.token = new MockERC3643Token();
+        fixture.token = IERC3643TokenMinimal(address(new MockERC3643Token()));
 
         // ── 6. MockCCIPRouter (offset +5) ──
         fixture.router = new MockCCIPRouter();
@@ -95,7 +100,8 @@ contract ProtocolFixtureBase is Test {
         fixture.transportProvider = new CCIPTransportProvider(
             IProtocolAccessManager(address(fixture.accessManager)),
             ICcipRouterClient(address(fixture.router)),
-            ISettlementCoordinator(predictedCoordinator)
+            ISettlementCoordinator(predictedCoordinator),
+            address(0)
         );
 
         // ── 9. SettlementCoordinator (offset +7) ──
@@ -130,6 +136,130 @@ contract ProtocolFixtureBase is Test {
 
         // ── 12. Fund transport provider with native gas for CCIP fees ──
         vm.deal(address(fixture.transportProvider), 10 ether);
+    }
+
+    /// @notice Deploys a complete protocol stack backed by the real ERC-3643
+    ///         contracts (Token, IdentityRegistry, ModularCompliance, claim
+    ///         infrastructure). The test contract receives AGENT_ROLE on the
+    ///         token so that direct `fixture.token.mint(...)` calls from setUp
+    ///         still work. The adapter also receives AGENT_ROLE for settlement
+    ///         operations. A pre-configured investor identity is registered for
+    ///         `sender` with a valid claim.
+    /// @param  admin         Address that receives DEFAULT_ADMIN_ROLE.
+    /// @param  chainId       This chain's protocol-level identifier.
+    /// @param  ccipSelector  CCIP chain selector for this chain.
+    /// @param  bridgeOp      Address that receives BRIDGE_ROLE.
+    /// @param  complianceOp  Address that receives COMPLIANCE_ROLE.
+    /// @param  sender        Address to register as an investor with a valid
+    ///                       identity and claim (mint destination).
+    /// @return fixture       Fully deployed and initialized protocol stack.
+    /// @return erc3643Stack  The deployed ERC-3643 contracts for test access.
+    function deployProtocolWithRealERC3643(
+        address admin,
+        ChainId chainId,
+        uint64 ccipSelector,
+        address bridgeOp,
+        address complianceOp,
+        address sender
+    ) internal returns (ProtocolFixture memory fixture, ERC3643Stack memory erc3643Stack) {
+        uint256 nonceStart = vm.getNonce(address(this));
+
+        // ── 0. Deploy ERC-3643 stack via CREATE2 (no nonce impact) ──
+        erc3643Stack = deployERC3643StackWithName("Protocol Token", "PTK", 18);
+
+        // ── 1. ProtocolAccessManager (offset +0) ──
+        fixture.accessManager = new ProtocolAccessManager(admin);
+
+        // ── 2. TransferIntentManager (offset +1) ──
+        fixture.transferIntentManager = new TransferIntentManager(
+            IProtocolAccessManager(address(fixture.accessManager))
+        );
+
+        // ── 3. RuleEngineComplianceProvider (offset +2) ──
+        fixture.complianceProvider = new RuleEngineComplianceProvider(
+            IProtocolAccessManager(address(fixture.accessManager))
+        );
+
+        // ── 4. ERC3643AssetAdapter (offset +3) ──
+        fixture.assetAdapter = new ERC3643AssetAdapter(
+            IProtocolAccessManager(address(fixture.accessManager)),
+            chainId
+        );
+
+        // ── 5. MockCCIPRouter (offset +4) ──
+        fixture.router = new MockCCIPRouter();
+
+        // ── 6. Resolve circular dependency ──
+        // SettlementCoordinator (offset +6) must be pre-computed before
+        // deploying CCIPTransportProvider (offset +5), because each needs
+        // the other's address in its constructor.
+        address predictedCoordinator = vm.computeCreateAddress(
+            address(this), nonceStart + 6
+        );
+
+        // ── 7. CCIPTransportProvider (offset +5) ──
+        fixture.transportProvider = new CCIPTransportProvider(
+            IProtocolAccessManager(address(fixture.accessManager)),
+            ICcipRouterClient(address(fixture.router)),
+            ISettlementCoordinator(predictedCoordinator),
+            address(0)
+        );
+
+        // ── 8. SettlementCoordinator (offset +6) ──
+        fixture.settlementCoordinator = new SettlementCoordinator(
+            IProtocolAccessManager(address(fixture.accessManager)),
+            chainId,
+            ITransferIntentManager(address(fixture.transferIntentManager)),
+            ICompliancePolicyProvider(address(fixture.complianceProvider)),
+            IAssetAdapter(address(fixture.assetAdapter)),
+            ITransportProvider(address(fixture.transportProvider))
+        );
+
+        // ── 9. Token wiring ──
+        fixture.token = IERC3643TokenMinimal(address(erc3643Stack.token));
+
+        // Grant AGENT_ROLE on the real token to the test contract (for setUp)
+        // and to the adapter (for settlement operations), then unpause.
+        IERC3643TokenMinimal(address(erc3643Stack.token)).addAgent(address(this));
+        IERC3643TokenMinimal(address(erc3643Stack.token)).addAgent(address(fixture.assetAdapter));
+        IERC3643TokenMinimal(address(erc3643Stack.token)).unpause();
+
+        // Register a trusted issuer claim topic, add the claim topic,
+        // create an investor identity, and register it.
+        ITIR(erc3643Stack.trustedIssuersRegistry).addTrustedIssuer(
+            erc3643Stack.claimIssuer,
+            _asUint256Array(erc3643Stack.claimTopic)
+        );
+
+        createAndRegisterInvestor(erc3643Stack, sender, 0);
+
+        // ── 10. Store metadata ──
+        fixture.chainId = chainId;
+        fixture.admin = admin;
+        fixture.bridgeOp = bridgeOp;
+        fixture.complianceOp = complianceOp;
+
+        // ── 11. Grant protocol roles ──
+        vm.startPrank(admin);
+        fixture.accessManager.grantRole(
+            fixture.accessManager.BRIDGE_ROLE(), bridgeOp
+        );
+        fixture.accessManager.grantRole(
+            fixture.accessManager.BRIDGE_ROLE(),
+            address(fixture.settlementCoordinator)
+        );
+        fixture.accessManager.grantRole(
+            fixture.accessManager.COMPLIANCE_ROLE(), complianceOp
+        );
+        vm.stopPrank();
+
+        // ── 12. Fund transport provider with native gas for CCIP fees ──
+        vm.deal(address(fixture.transportProvider), 10 ether);
+    }
+
+    function _asUint256Array(uint256 v) private pure returns (uint256[] memory arr) {
+        arr = new uint256[](1);
+        arr[0] = v;
     }
 
     /// @notice Registers an asset in the adapter and sets its settlement model.
@@ -208,6 +338,7 @@ contract ProtocolFixtureBase is Test {
         vm.startPrank(fixture.bridgeOp);
         fixture.transportProvider.setChainSelector(remoteChain, remoteSelector);
         fixture.transportProvider.setAllowedSender(remoteChain, remoteProvider, true);
+        fixture.transportProvider.setRemoteReceiver(remoteChain, remoteProvider);
         vm.stopPrank();
     }
 }

@@ -116,8 +116,8 @@ contract CCIPTransportProviderTest is Test {
             phase: ProtocolTypes.SettlementPhase.VALIDATION_REQUEST,
             messageId: bytes32(0),
             intentId: INTENT_ID,
-            sourceChainId: CHAIN_A,
-            destinationChainId: CHAIN_B,
+            sourceChainId: ChainId.unwrap(CHAIN_A),
+            destinationChainId: ChainId.unwrap(CHAIN_B),
             expiresAt: 0,
             sender: address(0xAA),
             recipient: address(0xBB),
@@ -137,8 +137,7 @@ contract CCIPTransportProviderTest is Test {
             sourceChainSelector: sourceChainSelector,
             sender: abi.encode(sender),
             data: data,
-            destTokenAmounts: new address[](0),
-            destTokenAmountsValues: new uint256[](0)
+            destTokenAmounts: new ICcipRouterClient.EVMTokenAmount[](0)
         });
     }
 
@@ -155,7 +154,7 @@ contract CCIPTransportProviderTest is Test {
 
         _bridgeRole = accessManager.BRIDGE_ROLE();
 
-        provider = new CCIPTransportProvider(accessManager, router, ISettlementCoordinator(address(coordinator)));
+        provider = new CCIPTransportProvider(accessManager, router, ISettlementCoordinator(address(coordinator)), address(0));
 
         router.setProvider(provider);
     }
@@ -170,17 +169,17 @@ contract CCIPTransportProviderTest is Test {
 
     function test_ConstructorRevertsWhenAccessManagerZero() public {
         vm.expectRevert(CCIPTransportProvider.CCIPProvider__ZeroAddress.selector);
-        new CCIPTransportProvider(IProtocolAccessManager(address(0)), router, ISettlementCoordinator(address(coordinator)));
+        new CCIPTransportProvider(IProtocolAccessManager(address(0)), router, ISettlementCoordinator(address(coordinator)), address(0));
     }
 
     function test_ConstructorRevertsWhenRouterZero() public {
         vm.expectRevert(CCIPTransportProvider.CCIPProvider__ZeroAddress.selector);
-        new CCIPTransportProvider(accessManager, ICcipRouterClient(address(0)), ISettlementCoordinator(address(coordinator)));
+        new CCIPTransportProvider(accessManager, ICcipRouterClient(address(0)), ISettlementCoordinator(address(coordinator)), address(0));
     }
 
     function test_ConstructorRevertsWhenCoordinatorZero() public {
         vm.expectRevert(CCIPTransportProvider.CCIPProvider__ZeroAddress.selector);
-        new CCIPTransportProvider(accessManager, router, ISettlementCoordinator(address(0)));
+        new CCIPTransportProvider(accessManager, router, ISettlementCoordinator(address(0)), address(0));
     }
 
     function test_SupportsITransportProvider() public view {
@@ -369,8 +368,10 @@ contract CCIPTransportProviderTest is Test {
     // ═══════════════════════════════════════════════════════════════════════
 
     function _configureChainB() internal {
-        vm.prank(bridge);
+        vm.startPrank(bridge);
         provider.setChainSelector(CHAIN_B, SELECTOR_B);
+        provider.setRemoteReceiver(CHAIN_B, address(0xCC2));
+        vm.stopPrank();
     }
 
     function test_SendMessage() public {

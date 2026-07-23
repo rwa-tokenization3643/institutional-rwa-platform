@@ -10,7 +10,7 @@ pragma solidity 0.8.30;
 // ═════════════════════════════════════════════════════════════════════════════
 
 import {ProtocolFixture} from "../utils/ProtocolFixture.sol";
-import {ProtocolTypes} from "../../contracts/common/ProtocolTypes.sol";
+import {ProtocolTypes, ChainId} from "../../contracts/common/ProtocolTypes.sol";
 import {TransferIntentManager} from "../../contracts/core/TransferIntentManager.sol";
 import {ConformanceBase} from "./ConformanceBase.sol";
 
@@ -38,8 +38,8 @@ contract ExpiredIntentTest is ConformanceBase {
             recipientIdentityHash: bytes32(uint256(2)),
             assetId: ASSET_ID,
             partitionId: bytes32(0),
-            sourceChainId: SOURCE_CHAIN,
-            destinationChainId: DEST_CHAIN,
+            sourceChainId: ChainId.unwrap(SOURCE_CHAIN),
+            destinationChainId: ChainId.unwrap(DEST_CHAIN),
             amount: TRANSFER_AMOUNT,
             policyDecisionHash: bytes32(0),
             messageHash: bytes32(0),

@@ -593,7 +593,7 @@ contract RuleEngineComplianceProvider is ICompliancePolicyProvider, ERC165 {
         if (!result) idx++;
 
         // 5. Jurisdiction
-        (result, reasons[idx]) = _evaluateJurisdictions(intent.sourceChainId, intent.destinationChainId);
+        (result, reasons[idx]) = _evaluateJurisdictions(ChainId.wrap(intent.sourceChainId), ChainId.wrap(intent.destinationChainId));
         if (!result) idx++;
 
         // 6. Investor classification (sender)

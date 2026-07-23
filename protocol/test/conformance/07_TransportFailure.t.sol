@@ -16,6 +16,7 @@ pragma solidity 0.8.30;
 import {ProtocolFixture} from "../utils/ProtocolFixture.sol";
 import {ProtocolTypes} from "../../contracts/common/ProtocolTypes.sol";
 import {ITransportProvider} from "../../contracts/interfaces/ITransportProvider.sol";
+import {MockERC3643Token} from "../mocks/MockERC3643Token.sol";
 import {ConformanceBase} from "./ConformanceBase.sol";
 
 contract TransportFailureTest is ConformanceBase {
@@ -42,7 +43,7 @@ contract TransportFailureTest is ConformanceBase {
         dest.transferIntentManager.transitionState(intentId, ProtocolTypes.SettlementState.VALIDATED);
 
         // Make destination token revert on mint.
-        dest.token.setShouldRevertMint(true);
+        MockERC3643Token(address(dest.token)).setShouldRevertMint(true);
 
         // Deliver SETTLEMENT_INSTRUCTION — handler will try to mint and fail.
         bytes32 msgId = keccak256("transport_failure");
@@ -77,7 +78,7 @@ contract TransportFailureTest is ConformanceBase {
         assertEq(dest.token.balanceOf(recipient), 0, "recipient balance zero after failed mint");
 
         // Now fix the token and retry with a new messageId.
-        dest.token.setShouldRevertMint(false);
+        MockERC3643Token(address(dest.token)).setShouldRevertMint(false);
 
         bytes32 retryMsgId = keccak256("transport_failure_retry");
 

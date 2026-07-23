@@ -183,12 +183,14 @@ contract ProtocolIntegrationTest is Test {
         sourceTransport = new CCIPTransportProvider(
             sourceAccessManager,
             ICcipRouterClient(address(sourceRouter)),
-            ISettlementCoordinator(predictedSourceCoordinator)
+            ISettlementCoordinator(predictedSourceCoordinator),
+            address(0)
         );
         destTransport = new CCIPTransportProvider(
             destAccessManager,
             ICcipRouterClient(address(destRouter)),
-            ISettlementCoordinator(predictedDestCoordinator)
+            ISettlementCoordinator(predictedDestCoordinator),
+            address(0)
         );
 
         // ── 9. SettlementCoordinator ────────────────────────────────────────
@@ -231,6 +233,7 @@ contract ProtocolIntegrationTest is Test {
         sourceTransport.setChainSelector(SOURCE_CHAIN, CCIP_SOURCE_SELECTOR);
         sourceTransport.setChainSelector(DEST_CHAIN, CCIP_DEST_SELECTOR);
         sourceTransport.setAllowedSender(DEST_CHAIN, address(destTransport), true);
+        sourceTransport.setRemoteReceiver(DEST_CHAIN, address(destTransport));
         vm.stopPrank();
 
         // ── 13. Configure Transport (Destination) ───────────────────────────
@@ -238,6 +241,7 @@ contract ProtocolIntegrationTest is Test {
         destTransport.setChainSelector(SOURCE_CHAIN, CCIP_SOURCE_SELECTOR);
         destTransport.setChainSelector(DEST_CHAIN, CCIP_DEST_SELECTOR);
         destTransport.setAllowedSender(SOURCE_CHAIN, address(sourceTransport), true);
+        destTransport.setRemoteReceiver(SOURCE_CHAIN, address(sourceTransport));
         vm.stopPrank();
 
         // ── 14. Configure Adapters ──────────────────────────────────────────
@@ -317,8 +321,8 @@ contract ProtocolIntegrationTest is Test {
             recipientIdentityHash: recipientIdentity,
             assetId: assetId_,
             partitionId: bytes32(0),
-            sourceChainId: sourceChain,
-            destinationChainId: destChain,
+            sourceChainId: ChainId.unwrap(sourceChain),
+            destinationChainId: ChainId.unwrap(destChain),
             amount: amount,
             policyDecisionHash: bytes32(0),
             messageHash: bytes32(0),
@@ -344,8 +348,7 @@ contract ProtocolIntegrationTest is Test {
             sourceChainSelector: ccipSourceSelector,
             sender: abi.encode(senderAddress),
             data: payload,
-            destTokenAmounts: new address[](0),
-            destTokenAmountsValues: new uint256[](0)
+            destTokenAmounts: new ICcipRouterClient.EVMTokenAmount[](0)
         });
     }
 
@@ -387,8 +390,8 @@ contract ProtocolIntegrationTest is Test {
             phase: ProtocolTypes.SettlementPhase.SETTLEMENT_INSTRUCTION,
             messageId: bytes32(0),
             intentId: intentId,
-            sourceChainId: sourceChain,
-            destinationChainId: destChain,
+            sourceChainId: ChainId.unwrap(sourceChain),
+            destinationChainId: ChainId.unwrap(destChain),
             expiresAt: expiresAt,
             sender: sourceTransportAddress,
             recipient: address(0),
@@ -914,8 +917,8 @@ contract ProtocolIntegrationTest is Test {
             phase: ProtocolTypes.SettlementPhase.SETTLEMENT_INSTRUCTION,
             messageId: bytes32(0),
             intentId: intentId,
-            sourceChainId: SOURCE_CHAIN,
-            destinationChainId: DEST_CHAIN,
+            sourceChainId: ChainId.unwrap(SOURCE_CHAIN),
+            destinationChainId: ChainId.unwrap(DEST_CHAIN),
             expiresAt: intent.expiresAt,
             sender: address(sourceTransport),
             recipient: address(0),

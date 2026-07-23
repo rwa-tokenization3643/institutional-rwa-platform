@@ -3,7 +3,7 @@ pragma solidity 0.8.30;
 
 import {ProtocolFixture} from "../utils/ProtocolFixture.sol";
 import {ConformanceBase} from "./ConformanceBase.sol";
-import {ProtocolTypes} from "../../contracts/common/ProtocolTypes.sol";
+import {ProtocolTypes, ChainId} from "../../contracts/common/ProtocolTypes.sol";
 
 contract PartialFillTest is ConformanceBase {
     ProtocolFixture source;
@@ -34,8 +34,8 @@ contract PartialFillTest is ConformanceBase {
             recipientIdentityHash: bytes32(uint256(2)),
             assetId: ASSET_ID,
             partitionId: bytes32(0),
-            sourceChainId: SOURCE_CHAIN,
-            destinationChainId: DEST_CHAIN,
+            sourceChainId: ChainId.unwrap(SOURCE_CHAIN),
+            destinationChainId: ChainId.unwrap(DEST_CHAIN),
             amount: EXCESS_AMOUNT,
             policyDecisionHash: bytes32(0),
             messageHash: bytes32(0),

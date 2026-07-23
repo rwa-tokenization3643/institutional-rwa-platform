@@ -307,7 +307,7 @@ contract SettlementCoordinator is ISettlementCoordinator, ERC165 {
         bytes memory payload = abi.encode(intentMem);
 
         _dispatchTransportMessage(
-            intentMem.destinationChainId,
+            ChainId.wrap(intentMem.destinationChainId),
             ProtocolTypes.MessageType.TRANSFER_INTENT,
             ProtocolTypes.SettlementPhase.VALIDATION_REQUEST,
             intentId,
@@ -315,7 +315,7 @@ contract SettlementCoordinator is ISettlementCoordinator, ERC165 {
             intentMem.expiresAt
         );
 
-        emit ValidationRequestSent(intentId, intentMem.destinationChainId);
+        emit ValidationRequestSent(intentId, ChainId.wrap(intentMem.destinationChainId));
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -330,18 +330,18 @@ contract SettlementCoordinator is ISettlementCoordinator, ERC165 {
     ) external onlyTransportProvider {
         if (
             ChainId.unwrap(sourceChain)
-                != ChainId.unwrap(message.sourceChainId)
+                != message.sourceChainId
         ) {
             revert SettlementCoordinator__ChainMismatch(
-                sourceChain, message.sourceChainId
+                sourceChain, ChainId.wrap(message.sourceChainId)
             );
         }
         if (
-            ChainId.unwrap(message.destinationChainId)
+            message.destinationChainId
                 != ChainId.unwrap(_chainId)
         ) {
             revert SettlementCoordinator__ChainMismatch(
-                _chainId, message.destinationChainId
+                _chainId, ChainId.wrap(message.destinationChainId)
             );
         }
 
@@ -493,7 +493,7 @@ contract SettlementCoordinator is ISettlementCoordinator, ERC165 {
             );
             _sendValidationResponse(
                 intentId,
-                message.sourceChainId,
+                ChainId.wrap(message.sourceChainId),
                 ProtocolTypes.ComplianceResult.DENIED
             );
             return;
@@ -506,7 +506,7 @@ contract SettlementCoordinator is ISettlementCoordinator, ERC165 {
 
         _sendValidationResponse(
             intentId,
-            message.sourceChainId,
+            ChainId.wrap(message.sourceChainId),
             ProtocolTypes.ComplianceResult.APPROVED
         );
     }
@@ -580,7 +580,7 @@ contract SettlementCoordinator is ISettlementCoordinator, ERC165 {
         );
 
         _dispatchTransportMessage(
-            intent.destinationChainId,
+            ChainId.wrap(intent.destinationChainId),
             ProtocolTypes.MessageType.TRANSFER_INTENT,
             ProtocolTypes.SettlementPhase.SETTLEMENT_INSTRUCTION,
             intentId,
@@ -588,7 +588,7 @@ contract SettlementCoordinator is ISettlementCoordinator, ERC165 {
             intent.expiresAt
         );
 
-        emit SettlementInstructionSent(intentId, intent.destinationChainId);
+        emit SettlementInstructionSent(intentId, ChainId.wrap(intent.destinationChainId));
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -775,8 +775,8 @@ contract SettlementCoordinator is ISettlementCoordinator, ERC165 {
             phase: phase,
             messageId: bytes32(0),
             intentId: intentId,
-            sourceChainId: _chainId,
-            destinationChainId: destinationChain,
+            sourceChainId: ChainId.unwrap(_chainId),
+            destinationChainId: ChainId.unwrap(destinationChain),
             expiresAt: expiresAt,
             sender: address(this),
             recipient: address(0),

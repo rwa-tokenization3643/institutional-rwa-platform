@@ -31,14 +31,19 @@ import {ChainId, ProtocolTypes} from "../../common/ProtocolTypes.sol";
 /// @dev Declares only `ccipSend` and `getFee`. The full IRouterClient defines
 ///      additional functions not needed by this provider.
 interface ICcipRouterClient {
+    /// @notice Struct for a single token amount in CCIP messages.
+    struct EVMTokenAmount {
+        address token;
+        uint256 amount;
+    }
+
     /// @notice Struct for encoding a CCIP outbound message.
     /// @dev receiver must be ABI-encoded address of the destination receiver.
     ///      feeToken = address(0) means pay in native gas.
     struct EVM2AnyMessage {
         bytes receiver;
         bytes data;
-        address[] tokenAmounts; // unused — kept for struct layout compatibility
-        uint256[] tokenAmountsValues;
+        EVMTokenAmount[] tokenAmounts;
         address feeToken;
         bytes extraArgs;
     }
@@ -69,8 +74,14 @@ struct Any2EVMMessage {
     uint64 sourceChainSelector;
     bytes sender;
     bytes data;
-    address[] destTokenAmounts;
-    uint256[] destTokenAmountsValues;
+    ICcipRouterClient.EVMTokenAmount[] destTokenAmounts;
+}
+
+/// @notice Minimal CCIP EVM2AnyMessage receiver interface.
+/// @dev The real CCIP Router calls supportsInterface(0x81d17744) before
+///      delivering messages. This interface must be supported.
+interface IAny2EVMMessageReceiver {
+    function ccipReceive(Any2EVMMessage calldata message) external;
 }
 
 /// @notice Minimal CCIP Receiver interface.
@@ -224,12 +235,18 @@ contract CCIPTransportProvider is ITransportProvider, ERC165, ICcipReceiver {
     /// @dev The source chain has no allowed sender configured.
     error CCIPProvider__SenderNotAllowed(uint64 sourceChainSelector, address sender);
 
+    /// @dev No remote receiver configured for the destination chain.
+    error CCIPProvider__RemoteReceiverNotSet(ChainId destinationChain);
+
     /// @dev The inbound message payload could not be decoded.
     error CCIPProvider__InvalidPayload(bytes32 messageId);
 
     /// @dev The message is not retryable — it is currently processing or
     ///      already delivered. Only FAILED messages may be retried.
     error CCIPProvider__MessageNotRetryable(bytes32 messageId, ProtocolTypes.TransportStatus current);
+
+    /// @dev The transport has no LINK allowance for the Router.
+    error CCIPProvider__LinkAllowanceNotSet();
 
     // ═══════════════════════════════════════════════════════════════════════
     // Events
@@ -241,6 +258,9 @@ contract CCIPTransportProvider is ITransportProvider, ERC165, ICcipReceiver {
 
     /// @dev An allowed sender was configured (or removed) for a remote chain.
     event AllowedSenderSet(ChainId indexed chainId, address sender, bool allowed);
+
+    /// @dev A remote receiver was configured for a destination chain.
+    event RemoteReceiverSet(ChainId indexed chainId, address receiver);
 
     // ═══════════════════════════════════════════════════════════════════════
     // Constants
@@ -268,6 +288,11 @@ contract CCIPTransportProvider is ITransportProvider, ERC165, ICcipReceiver {
     /// @dev Cached BRIDGE_ROLE identifier.
     bytes32 private immutable _bridgeRole;
 
+    /// @dev LINK token address, or address(0) to pay fees in native gas.
+    ///      When non-zero, the transport must have enough LINK balance and
+    ///      Router allowance to cover outbound fees.
+    address private immutable _linkToken;
+
     // ═══════════════════════════════════════════════════════════════════════
     // Mutable State
     // ═══════════════════════════════════════════════════════════════════════
@@ -284,21 +309,27 @@ contract CCIPTransportProvider is ITransportProvider, ERC165, ICcipReceiver {
     /// @dev Transport status per message ID.
     mapping(bytes32 messageId => ProtocolTypes.TransportStatus status) private _messageStatus;
 
-
+    /// @dev Maps destination chain → remote transport receiver address.
+    ///      The CCIP router on the destination chain delivers messages to this
+    ///      address, which MUST implement ccipReceive (i.e., be a
+    ///      CCIPTransportProvider or equivalent).
+    mapping(ChainId destinationChain => address receiver) private _remoteReceivers;
 
     // ═══════════════════════════════════════════════════════════════════════
     // Constructor
     // ═══════════════════════════════════════════════════════════════════════
 
     /// @notice Configures the provider with its dependencies.
-    /// @dev All addresses MUST be non-zero.
+    /// @dev All addresses MUST be non-zero except linkToken (optional).
     /// @param accessManager  Protocol-wide access manager.
     /// @param router         CCIP Router contract.
     /// @param coordinator    SettlementCoordinator that processes inbound messages.
+    /// @param linkToken      LINK token address, or address(0) to pay in native gas.
     constructor(
         IProtocolAccessManager accessManager,
         ICcipRouterClient router,
-        ISettlementCoordinator coordinator
+        ISettlementCoordinator coordinator,
+        address linkToken
     ) {
         if (address(accessManager) == address(0)) revert CCIPProvider__ZeroAddress();
         if (address(router) == address(0)) revert CCIPProvider__ZeroAddress();
@@ -306,6 +337,7 @@ contract CCIPTransportProvider is ITransportProvider, ERC165, ICcipReceiver {
         _accessManager = accessManager;
         _router = router;
         _coordinator = coordinator;
+        _linkToken = linkToken;
         _bridgeRole = accessManager.BRIDGE_ROLE();
     }
 
@@ -317,6 +349,8 @@ contract CCIPTransportProvider is ITransportProvider, ERC165, ICcipReceiver {
     function supportsInterface(bytes4 interfaceId) public view override(ERC165, IERC165) returns (bool) {
         return interfaceId == type(ITransportProvider).interfaceId
             || interfaceId == type(ICcipReceiver).interfaceId
+            || interfaceId == type(IAny2EVMMessageReceiver).interfaceId
+            || interfaceId == 0x81d17744 // IAny2EVMMessageReceiver selector
             || super.supportsInterface(interfaceId);
     }
 
@@ -365,6 +399,21 @@ contract CCIPTransportProvider is ITransportProvider, ERC165, ICcipReceiver {
         emit AllowedSenderSet(chainId, sender, allowed);
     }
 
+    /// @notice Sets the remote transport address that will receive CCIP
+    ///         messages on the destination chain.
+    /// @dev The receiver MUST be a CCIPTransportProvider (or equivalent)
+    ///      that implements ccipReceive. Reverts if the chain has no CCIP
+    ///      selector mapped.
+    /// @param chainId  Protocol-level destination chain identifier.
+    /// @param receiver Address of the transport contract on the remote chain.
+    function setRemoteReceiver(ChainId chainId, address receiver) external {
+        _onlyBridgeRole();
+        if (_chainSelectors[chainId] == 0) revert CCIPProvider__ChainNotSupported(chainId);
+        if (receiver == address(0)) revert CCIPProvider__ZeroAddress();
+        _remoteReceivers[chainId] = receiver;
+        emit RemoteReceiverSet(chainId, receiver);
+    }
+
     // ═══════════════════════════════════════════════════════════════════════
     // Native ETH Management
     // ═══════════════════════════════════════════════════════════════════════
@@ -374,6 +423,18 @@ contract CCIPTransportProvider is ITransportProvider, ERC165, ICcipReceiver {
 
     /// @notice Explicitly deposits ETH to fund CCIP message fees.
     function deposit() external payable {}
+
+    /// @notice Approves the CCIP Router to spend the transport's LINK tokens
+    ///         for fee payment. Call this after deployment and after each
+    ///         LINK top-up if the Router's allowance was reset.
+    /// @dev    Reverts if LINK is not configured (linkToken == address(0)).
+    ///         Uses a large approval to avoid repeated approvals.
+    function approveRouterLink() external {
+        _onlyBridgeRole();
+        if (_linkToken == address(0)) revert CCIPProvider__ZeroAddress();
+        (bool ok,) = _linkToken.call(abi.encodeWithSelector(0x095ea7b3, address(_router), type(uint256).max));
+        if (!ok) revert CCIPProvider__LinkAllowanceNotSet();
+    }
 
     // ═══════════════════════════════════════════════════════════════════════
     // ITransportProvider: Sending
@@ -394,7 +455,11 @@ contract CCIPTransportProvider is ITransportProvider, ERC165, ICcipReceiver {
 
         // ── Compute fee and send via CCIP Router ──
         uint256 fee = _router.getFee(selector, ccipMessage);
-        messageId = _router.ccipSend{value: fee}(selector, ccipMessage);
+        if (_linkToken != address(0)) {
+            messageId = _router.ccipSend(selector, ccipMessage);
+        } else {
+            messageId = _router.ccipSend{value: fee}(selector, ccipMessage);
+        }
 
         // ── Track status ──
         _messageStatus[messageId] = ProtocolTypes.TransportStatus.PENDING;
@@ -564,22 +629,35 @@ contract CCIPTransportProvider is ITransportProvider, ERC165, ICcipReceiver {
         return _allowedSenders[chainId][sender];
     }
 
+    /// @notice Returns the remote transport receiver for a destination chain.
+    /// @param  chainId Protocol-level destination chain identifier.
+    /// @return receiver Address of the transport on the remote chain, or
+    ///                  address(0) if not configured.
+    function getRemoteReceiver(ChainId chainId) external view returns (address receiver) {
+        return _remoteReceivers[chainId];
+    }
+
     // ═══════════════════════════════════════════════════════════════════════
     // Internal: Message Encoding
     // ═══════════════════════════════════════════════════════════════════════
 
     /// @dev Builds a CCIP EVM2AnyMessage from a protocol TransportMessage.
     ///      Shared by sendMessage and estimateFee.
+    ///      The receiver is the remote transport address configured for the
+    ///      destination chain via setRemoteReceiver().
     function _buildCCIPMessage(
         ProtocolTypes.TransportMessage calldata message
     ) private view returns (ICcipRouterClient.EVM2AnyMessage memory) {
+        address receiver = _remoteReceivers[ChainId.wrap(message.destinationChainId)];
+        if (receiver == address(0)) {
+            revert CCIPProvider__RemoteReceiverNotSet(ChainId.wrap(message.destinationChainId));
+        }
         return ICcipRouterClient.EVM2AnyMessage({
-            receiver: abi.encode(_coordinator),
+            receiver: abi.encode(receiver),
             data: abi.encode(message),
-            tokenAmounts: new address[](0),
-            tokenAmountsValues: new uint256[](0),
-            feeToken: address(0), // pay in native gas
-            extraArgs: abi.encode(CCIP_DEFAULT_GAS_LIMIT)
+            tokenAmounts: new ICcipRouterClient.EVMTokenAmount[](0),
+            feeToken: _linkToken,
+            extraArgs: abi.encodeWithSelector(0x97a657c9, uint256(CCIP_DEFAULT_GAS_LIMIT))
         });
     }
 

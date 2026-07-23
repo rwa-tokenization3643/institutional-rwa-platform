@@ -224,11 +224,14 @@ library ProtocolTypes {
 
         // ── where ──────────────────────────────────────────────────────────
         /// @dev Source chain identifier within the protocol's chain registry.
-        ChainId sourceChainId;
+        ///      uint64 (not ChainId) avoids a Solidity compiler selector mismatch
+        ///      that arises when UDVTs appear inside structs used as function params.
+        uint64 sourceChainId;
         /// @dev Destination chain identifier within the protocol's chain registry.
-        ChainId destinationChainId;
+        ///      uint64 (not ChainId) for the same compiler-compatibility reason.
+        uint64 destinationChainId;
 
-        // ── amount ─────────────────────────────────────────────────────────
+        // ── amount ──────────────────────────────────────────────────────────
         /// @dev Token amount in the asset's base units.
         uint256 amount;
 
@@ -329,9 +332,11 @@ library ProtocolTypes {
         ///      messages).
         bytes32 intentId;
         /// @dev Source chain identifier within the protocol's chain registry.
-        ChainId sourceChainId;
+        ///      uint64 (not ChainId) — see the comment on TransferIntent for why.
+        uint64 sourceChainId;
         /// @dev Destination chain identifier within the protocol's chain registry.
-        ChainId destinationChainId;
+        ///      uint64 (not ChainId).
+        uint64 destinationChainId;
         /// @dev Block timestamp after which the message is stale and should
         ///      be discarded.
         uint64 expiresAt;

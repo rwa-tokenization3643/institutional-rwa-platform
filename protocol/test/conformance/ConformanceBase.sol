@@ -4,7 +4,7 @@ pragma solidity 0.8.30;
 import {Test} from "forge-std/Test.sol";
 import {ProtocolTypes, ChainId} from "../../contracts/common/ProtocolTypes.sol";
 import {ITransferIntentManager} from "../../contracts/interfaces/ITransferIntentManager.sol";
-import {CCIPTransportProvider, Any2EVMMessage} from "../../contracts/extensions/bridge/CCIPTransportProvider.sol";
+import {CCIPTransportProvider, ICcipRouterClient, Any2EVMMessage} from "../../contracts/extensions/bridge/CCIPTransportProvider.sol";
 import {MockCCIPRouter} from "../mocks/MockCCIPRouter.sol";
 import {ProtocolFixture, ProtocolFixtureBase} from "../utils/ProtocolFixture.sol";
 
@@ -52,8 +52,8 @@ abstract contract ConformanceBase is ProtocolFixtureBase {
             recipientIdentityHash: bytes32(uint256(2)),
             assetId: ASSET_ID,
             partitionId: bytes32(0),
-            sourceChainId: SOURCE_CHAIN,
-            destinationChainId: DEST_CHAIN,
+            sourceChainId: ChainId.unwrap(SOURCE_CHAIN),
+            destinationChainId: ChainId.unwrap(DEST_CHAIN),
             amount: TRANSFER_AMOUNT,
             policyDecisionHash: bytes32(0),
             messageHash: bytes32(0),
@@ -81,15 +81,12 @@ abstract contract ConformanceBase is ProtocolFixtureBase {
         address senderAddress,
         bytes memory payload
     ) internal pure returns (Any2EVMMessage memory) {
-        address[] memory emptyAddrs;
-        uint256[] memory emptyUints;
         return Any2EVMMessage({
             messageId: messageId,
             sourceChainSelector: ccipSourceSelector,
             sender: abi.encode(senderAddress),
             data: payload,
-            destTokenAmounts: emptyAddrs,
-            destTokenAmountsValues: emptyUints
+            destTokenAmounts: new ICcipRouterClient.EVMTokenAmount[](0)
         });
     }
 
@@ -130,8 +127,8 @@ abstract contract ConformanceBase is ProtocolFixtureBase {
             phase: phase,
             messageId: bytes32(0),
             intentId: intentId,
-            sourceChainId: sourceChain,
-            destinationChainId: destChain,
+            sourceChainId: ChainId.unwrap(sourceChain),
+            destinationChainId: ChainId.unwrap(destChain),
             expiresAt: expiresAt,
             sender: address(0),
             recipient: address(0),
@@ -161,9 +158,11 @@ abstract contract ConformanceBase is ProtocolFixtureBase {
         source_.transportProvider.setChainSelector(SOURCE_CHAIN, CCIP_SOURCE_SELECTOR);
         source_.transportProvider.setChainSelector(DEST_CHAIN, CCIP_DEST_SELECTOR);
         source_.transportProvider.setAllowedSender(DEST_CHAIN, address(dest_.transportProvider), true);
+        source_.transportProvider.setRemoteReceiver(DEST_CHAIN, address(dest_.transportProvider));
         dest_.transportProvider.setChainSelector(SOURCE_CHAIN, CCIP_SOURCE_SELECTOR);
         dest_.transportProvider.setChainSelector(DEST_CHAIN, CCIP_DEST_SELECTOR);
         dest_.transportProvider.setAllowedSender(SOURCE_CHAIN, address(source_.transportProvider), true);
+        dest_.transportProvider.setRemoteReceiver(SOURCE_CHAIN, address(source_.transportProvider));
         vm.stopPrank();
     }
 

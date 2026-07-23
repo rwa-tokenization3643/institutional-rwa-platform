@@ -121,8 +121,8 @@ contract SettlementFlowTest is ProtocolFixtureBase {
             recipientIdentityHash: bytes32(uint256(2)),
             assetId: ASSET_ID,
             partitionId: bytes32(0),
-            sourceChainId: SOURCE_CHAIN,
-            destinationChainId: DEST_CHAIN,
+            sourceChainId: ChainId.unwrap(SOURCE_CHAIN),
+            destinationChainId: ChainId.unwrap(DEST_CHAIN),
             amount: TRANSFER_AMOUNT,
             policyDecisionHash: bytes32(0),
             messageHash: bytes32(0),
@@ -150,15 +150,12 @@ contract SettlementFlowTest is ProtocolFixtureBase {
         address senderAddress,
         bytes memory payload
     ) internal pure returns (Any2EVMMessage memory) {
-        address[] memory emptyAddrs;
-        uint256[] memory emptyUints;
         return Any2EVMMessage({
             messageId: messageId,
             sourceChainSelector: ccipSourceSelector,
             sender: abi.encode(senderAddress),
             data: payload,
-            destTokenAmounts: emptyAddrs,
-            destTokenAmountsValues: emptyUints
+            destTokenAmounts: new ICcipRouterClient.EVMTokenAmount[](0)
         });
     }
 
@@ -199,8 +196,8 @@ contract SettlementFlowTest is ProtocolFixtureBase {
             phase: phase,
             messageId: bytes32(0),
             intentId: intentId,
-            sourceChainId: sourceChain,
-            destinationChainId: destChain,
+            sourceChainId: ChainId.unwrap(sourceChain),
+            destinationChainId: ChainId.unwrap(destChain),
             expiresAt: expiresAt,
             sender: address(0),
             recipient: address(0),
@@ -232,6 +229,7 @@ contract SettlementFlowTest is ProtocolFixtureBase {
         source.transportProvider.setChainSelector(SOURCE_CHAIN, CCIP_SOURCE_SELECTOR);
         source.transportProvider.setChainSelector(DEST_CHAIN, CCIP_DEST_SELECTOR);
         source.transportProvider.setAllowedSender(DEST_CHAIN, address(dest.transportProvider), true);
+        source.transportProvider.setRemoteReceiver(DEST_CHAIN, address(dest.transportProvider));
         vm.stopPrank();
 
         // Configure transport on destination
@@ -239,6 +237,7 @@ contract SettlementFlowTest is ProtocolFixtureBase {
         dest.transportProvider.setChainSelector(SOURCE_CHAIN, CCIP_SOURCE_SELECTOR);
         dest.transportProvider.setChainSelector(DEST_CHAIN, CCIP_DEST_SELECTOR);
         dest.transportProvider.setAllowedSender(SOURCE_CHAIN, address(source.transportProvider), true);
+        dest.transportProvider.setRemoteReceiver(SOURCE_CHAIN, address(source.transportProvider));
         vm.stopPrank();
 
         // Configure assets on both chains

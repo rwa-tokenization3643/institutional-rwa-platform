@@ -26,6 +26,7 @@ contract ReservationRollbackTest is ConformanceBase {
         vm.startPrank(bridgeOp);
         source.transportProvider.setChainSelector(SOURCE_CHAIN, CCIP_SOURCE_SELECTOR);
         source.transportProvider.setChainSelector(DEST_CHAIN, CCIP_DEST_SELECTOR);
+        source.transportProvider.setRemoteReceiver(DEST_CHAIN, address(1));
         vm.stopPrank();
         _configureAssetAndCompliance(source);
         _mintSenderTokens(source);

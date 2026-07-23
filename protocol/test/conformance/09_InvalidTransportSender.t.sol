@@ -16,7 +16,7 @@ pragma solidity 0.8.30;
 // ═════════════════════════════════════════════════════════════════════════════
 
 import {ProtocolFixture} from "../utils/ProtocolFixture.sol";
-import {ProtocolTypes} from "../../contracts/common/ProtocolTypes.sol";
+import {ProtocolTypes, ChainId} from "../../contracts/common/ProtocolTypes.sol";
 import {CCIPTransportProvider, Any2EVMMessage} from "../../contracts/extensions/bridge/CCIPTransportProvider.sol";
 import {ConformanceBase} from "./ConformanceBase.sol";
 
@@ -64,8 +64,8 @@ contract InvalidTransportSenderTest is ConformanceBase {
             phase: ProtocolTypes.SettlementPhase.SETTLEMENT_INSTRUCTION,
             messageId: bytes32(0),
             intentId: intentId,
-            sourceChainId: SOURCE_CHAIN,
-            destinationChainId: DEST_CHAIN,
+            sourceChainId: ChainId.unwrap(SOURCE_CHAIN),
+            destinationChainId: ChainId.unwrap(DEST_CHAIN),
             expiresAt: intent.expiresAt,
             sender: address(0),
             recipient: address(0),
